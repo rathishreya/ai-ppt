@@ -17,10 +17,12 @@ from pptx.util import Emu, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR, MSO_AUTO_SIZE
 from pptx.enum.shapes import MSO_SHAPE, MSO_CONNECTOR
+from pptx.oxml.ns import qn
 
 from .ir import DeckIR, ShapeIR, ParaIR
 from .brand import BrandSpec
 from .classify import classify_slide, SlidePlan
+from . import color as C
 
 IN = 914400
 
@@ -70,11 +72,46 @@ def rrect(slide, x, y, w, h, fill=None, radius=0.06, line=None, line_w=1.0):
     return sp
 
 
-def hrule(slide, x, y, w, hex_, weight=1.2):
+def hrule(slide, x, y, w, hex_, weight=1.2, dash=None):
     ln = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, _emu(x), _emu(y), _emu(x + w), _emu(y))
     ln.line.color.rgb = _rgb(hex_)
     ln.line.width = Pt(weight)
+    if dash:
+        lnel = ln.line._get_or_add_ln()
+        lnel.append(lnel.makeelement(qn("a:prstDash"), {"val": dash}))
     return ln
+
+
+def icon_ring(slide, x, y, d, ring_hex, icon_blob=None):
+    ov = slide.shapes.add_shape(MSO_SHAPE.OVAL, _emu(x), _emu(y), _emu(d), _emu(d))
+    ov.fill.background()
+    ov.line.color.rgb = _rgb(ring_hex)
+    ov.line.width = Pt(1.6)
+    ov.shadow.inherit = False
+    placed = False
+    if icon_blob:
+        s = d * 0.5
+        off = (d - s) / 2
+        try:
+            slide.shapes.add_picture(io.BytesIO(icon_blob), _emu(x + off), _emu(y + off), _emu(s), _emu(s))
+            placed = True
+        except Exception:
+            pass
+    if not placed:  # accent dot so empty rings read as intentional
+        dd = d * 0.30
+        o = (d - dd) / 2
+        dot = slide.shapes.add_shape(MSO_SHAPE.OVAL, _emu(x + o), _emu(y + o), _emu(dd), _emu(dd))
+        _solid(dot, ring_hex)
+        _no_line(dot)
+        dot.shadow.inherit = False
+    return ov
+
+
+def bg_image(slide, deck, blob):
+    try:
+        slide.shapes.add_picture(io.BytesIO(blob), 0, 0, deck.width_emu, deck.height_emu)
+    except Exception:
+        pass
 
 
 def _set_tracking(run, pts: float):
@@ -145,29 +182,99 @@ def _block_h_in(text, size_pt, width_in, line_spacing=1.12, pad=0.06) -> float:
 
 # ---------------------------------------------------------------- body rendering
 
+def _para_spec_one(para: ParaIR, B: BrandSpec, base_color: str, size=None,
+                   space_after=7, lead_color=None) -> dict | None:
+    """One styled paragraph spec, preserving runs. Bold lead-in -> accent."""
+    runs = [r for r in para.runs if r.text != ""]
+    if not runs:
+        return None
+    has_following_plain = any(not r.bold for r in runs[1:])
+    lead_color = lead_color or B.accent
+    rspecs = []
+    for j, r in enumerate(runs):
+        is_lead = bool(r.bold) and j == 0 and has_following_plain
+        rspecs.append({"text": r.text, "color": lead_color if is_lead else base_color,
+                       "bold": bool(r.bold)})
+    return {"runs": rspecs, "size": size or B.scale["body"], "font": B.body_font,
+            "color": base_color, "line_spacing": 1.14, "space_after": space_after}
+
+
 def _para_specs(shape: ShapeIR, B: BrandSpec) -> list[dict]:
-    """Turn a source text shape's paragraphs into styled body paragraphs, preserving runs.
-    A bold-leading run becomes an accent lead-in; the rest is ink."""
     out = []
     for para in shape.paras:
-        runs = [r for r in para.runs if r.text != ""]
-        if not runs:
-            continue
-        has_following_plain = any(not r.bold for r in runs[1:])
-        rspecs = []
-        for j, r in enumerate(runs):
-            # accent lead-in only for a "**Lead —** normal text" pattern
-            is_lead = bool(r.bold) and j == 0 and has_following_plain
-            rspecs.append({
-                "text": r.text,
-                "color": B.accent if is_lead else B.ink,
-                "bold": bool(r.bold),
-            })
-        out.append({
-            "runs": rspecs, "size": B.scale["body"], "font": B.body_font,
-            "color": B.ink, "line_spacing": 1.14, "space_after": 7,
-        })
+        s = _para_spec_one(para, B, B.ink)
+        if s:
+            out.append(s)
     return out
+
+
+def _body_items(plan: SlidePlan) -> list[ParaIR]:
+    """Flatten body into a list of non-empty paragraphs (one per 'item')."""
+    items = []
+    for sh in plan.body:
+        for para in sh.paras:
+            if para.text.strip():
+                items.append(para)
+    return items
+
+
+def _para_len(para: ParaIR) -> int:
+    return len(para.text.strip())
+
+
+def _is_label(para: ParaIR) -> bool:
+    """A short, (near) all-caps standalone label like 'WHAT AI71 BRINGS'."""
+    t = para.text.strip()
+    if not t or len(t) > 34:
+        return False
+    lowers = sum(1 for c in t if c.islower())
+    return lowers <= 2
+
+
+def _section_label(slide, B, x, y, w, para, on_dark):
+    spec = {"runs": [{"text": para.text.strip(), "color": B.accent, "bold": True}],
+            "size": B.scale["eyebrow"] + 1, "font": B.body_font, "tracking": 1.4, "space_after": 0}
+    tb = add_text(slide, x, y, 2.6, 0.3, [spec])
+    rule_col = "34597B" if on_dark else C.mix(B.neutral, "FFFFFF", 0.35)
+    hrule(slide, x + 2.7, y + 0.14, w - 2.7, rule_col, 0.9)
+
+
+def _render_icon_list(slide, deck, B, x, y, w, h, items, icons, on_dark):
+    n = max(1, len(items))
+    row_h = h / n
+    text_color = "FFFFFF" if on_dark else B.ink
+    lead_color = B.accent
+    div_color = "34597B" if on_dark else C.mix(B.neutral, "FFFFFF", 0.35)
+    d = min(0.66, row_h * 0.62)
+    tx = x + d + 0.28
+    tw = w - (d + 0.28) - 0.1
+    for i, para in enumerate(items):
+        ry = y + i * row_h
+        icon_ring(slide, x, ry + (row_h - d) / 2, d, B.accent, icons[i] if i < len(icons) else None)
+        spec = _para_spec_one(para, B, text_color, lead_color=lead_color, space_after=0)
+        if spec:
+            add_text(slide, tx, ry, tw, row_h, [spec], anchor=MSO_ANCHOR.MIDDLE, autofit=True)
+        if i < n - 1:
+            hrule(slide, tx, ry + row_h, tw, div_color, 0.9, dash="dash")
+
+
+def _render_card_grid(slide, deck, B, x, y, w, h, items):
+    n = len(items)
+    cols = 3 if n in (3, 6, 9) else (2 if n in (2, 4) else min(3, n))
+    rows = math.ceil(n / cols)
+    gap = 0.22
+    cw = (w - gap * (cols - 1)) / cols
+    ch = (h - gap * (rows - 1)) / rows
+    for i, para in enumerate(items):
+        r, c = divmod(i, cols)
+        cx, cy = x + c * (cw + gap), y + r * (ch + gap)
+        rrect(slide, cx, cy, cw, ch, fill=B.light, radius=0.08)
+        # accent tab
+        rrect(slide, cx, cy, 0.09, ch, fill=B.accent, radius=0.0)
+        spec = _para_spec_one(para, B, B.ink, size=B.scale["body"], space_after=0)
+        if spec:
+            add_text(slide, cx + 0.24, cy + 0.16, cw - 0.4, ch - 0.32, [spec],
+                     anchor=MSO_ANCHOR.TOP, autofit=True)
 
 
 # ---------------------------------------------------------------- footer
@@ -278,8 +385,10 @@ def _split_headline(shapes: list[ShapeIR]) -> tuple[str, str]:
     return headline, support
 
 
-def build_title(slide, deck, plan, B):
+def build_title(slide, deck, plan, B, icons=None, texture=None):
     bg(slide, deck, B.dark)
+    if texture:
+        bg_image(slide, deck, texture)
     rrect(slide, deck.width_in - 1.5, deck.height_in - 1.5, 0.9, 0.9, fill=None,
           radius=0.5, line=B.accent, line_w=2.0)
     ml = 0.9
@@ -300,8 +409,10 @@ def build_title(slide, deck, plan, B):
     _footer(slide, deck, plan, B, on_dark=True)
 
 
-def build_closing(slide, deck, plan, B):
+def build_closing(slide, deck, plan, B, icons=None, texture=None):
     bg(slide, deck, B.dark)
+    if texture:
+        bg_image(slide, deck, texture)
     rrect(slide, deck.width_in - 1.5, deck.height_in - 1.5, 0.9, 0.9, fill=None,
           radius=0.5, line=B.accent, line_w=2.0)
     if plan.wordmark:
@@ -315,8 +426,10 @@ def build_closing(slide, deck, plan, B):
              anchor=MSO_ANCHOR.MIDDLE)
 
 
-def build_section(slide, deck, plan, B):
+def build_section(slide, deck, plan, B, icons=None, texture=None):
     bg(slide, deck, B.dark)
+    if texture:
+        bg_image(slide, deck, texture)
     ml = 0.9
     if plan.eyebrow:
         add_text(slide, ml, deck.height_in * 0.34, deck.width_in - 2 * ml, 0.35,
@@ -333,12 +446,11 @@ def build_section(slide, deck, plan, B):
     _footer(slide, deck, plan, B, on_dark=True)
 
 
-def build_content(slide, deck, plan, B):
+def build_content(slide, deck, plan, B, icons=None, texture=None):
+    icons = icons or []
     bg(slide, deck, B.paper)
     ml, mr, mt = 0.62, 0.62, 0.5
     cw = deck.width_in - ml - mr
-    has_side = False  # v1: source pictures are all tiny icons -> reintroduced as icon components later
-    text_w = cw * (0.62 if has_side else 1.0)
     y = mt
     # eyebrow
     if plan.eyebrow:
@@ -349,47 +461,73 @@ def build_content(slide, deck, plan, B):
         y += 0.32
     # title
     if plan.title:
-        th = _block_h_in(plan.title.text, B.scale["h1"], text_w, 1.06)
-        add_text(slide, ml, y, text_w, th + 0.15,
+        th = _block_h_in(plan.title.text, B.scale["h1"], cw, 1.06)
+        add_text(slide, ml, y, cw, th + 0.15,
                  [{"runs": [{"text": plan.title.text.replace("\n", " ")}], "size": B.scale["h1"],
                    "font": B.heading_font, "color": B.dark, "line_spacing": 1.05, "space_after": 0}])
-        y += th + 0.12
-    # accent rule
+        y += th + 0.10
     hrule(slide, ml, y, 0.7, B.accent, 2.4)
     y += 0.16
     # subtitle
     if plan.subtitle:
-        sh = _block_h_in(plan.subtitle.text, B.scale["subtitle"], text_w, 1.2)
-        add_text(slide, ml, y, text_w, sh + 0.1,
+        sh = _block_h_in(plan.subtitle.text, B.scale["subtitle"], cw, 1.2)
+        add_text(slide, ml, y, cw, sh + 0.1,
                  [{"runs": [{"text": plan.subtitle.text.replace("\n", " ")}], "size": B.scale["subtitle"],
                    "font": B.body_font, "color": B.neutral, "line_spacing": 1.18, "space_after": 0}])
-        y += sh + 0.14
-    # body region (auto-fit so it never overflows)
+        y += sh + 0.16
+
     body_bottom = deck.height_in - 0.62
-    specs = []
-    for sh in plan.body:
-        specs.extend(_para_specs(sh, B))
-    if specs:
-        if plan.tables:
-            # leave room for the table: give body a bounded block above it
-            est = sum(_block_h_in("".join(r["text"] for r in sp["runs"]), sp["size"], text_w)
-                      for sp in specs)
-            bh = min((body_bottom - y) * 0.5, est + 0.1)
-            add_text(slide, ml, y, text_w, max(0.5, bh), specs, anchor=MSO_ANCHOR.TOP, autofit=True)
+    items = _body_items(plan)
+
+    # a long, non-lead leading paragraph becomes a callout bar
+    callout = None
+    if items and _para_len(items[0]) >= 90 and not (items[0].runs and items[0].runs[0].bold):
+        callout = items[0]
+        items = items[1:]
+    if callout:
+        chh = _block_h_in(callout.text, B.scale["body"], cw - 0.5, 1.2) + 0.2
+        chh = min(chh, 1.3)
+        rrect(slide, ml, y, cw, chh, fill=B.light, radius=0.10)
+        spec = _para_spec_one(callout, B, B.ink, space_after=0)
+        add_text(slide, ml + 0.25, y + 0.1, cw - 0.5, chh - 0.2, [spec], anchor=MSO_ANCHOR.MIDDLE, autofit=True)
+        y += chh + 0.22
+
+    avail = body_bottom - y
+    lens = [_para_len(p) for p in items] or [0]
+    on_dark = bool(plan.eyebrow and plan.eyebrow.text.strip().upper().startswith("PHASE"))
+
+    if plan.tables:
+        # table slide: compact body list above the table
+        if items:
+            specs = [s for p in items if (s := _para_spec_one(p, B, B.ink))]
+            bh = min(avail * 0.45, 2.2)
+            add_text(slide, ml, y, cw, max(0.5, bh), specs, anchor=MSO_ANCHOR.TOP, autofit=True)
             y += bh + 0.18
-        else:
-            add_text(slide, ml, y, text_w, max(0.6, body_bottom - y), specs,
-                     anchor=MSO_ANCHOR.TOP, autofit=True)
-    # tables below body (bounded to remaining height)
-    for tb in plan.tables:
-        avail = body_bottom - y
-        if avail < 0.8:
-            y = body_bottom - 0.8
-            avail = 0.8
-        y = _table(slide, tb, ml, y, text_w, B, max_h=avail) + 0.15
-    # pictures on the side rail
-    if has_side:
-        _place_pictures(slide, plan, ml + text_w + 0.3, mt + 0.2, cw - text_w - 0.3, body_bottom - mt - 0.2)
+        for tb in plan.tables:
+            a = body_bottom - y
+            if a < 0.9:
+                y = body_bottom - 0.9; a = 0.9
+            y = _table(slide, tb, ml, y, cw, B, max_h=a) + 0.15
+    elif items and 3 <= len(items) <= 6 and max(lens) <= 115:
+        _render_card_grid(slide, deck, B, ml, y, cw, min(avail, 3.6), items)
+    elif items and 2 <= len(items) <= 7 and sum(lens) <= 1500:
+        # icon-list inside a callout card (dark for PHASE slides, light otherwise)
+        card_fill = B.dark if on_dark else B.light
+        rrect(slide, ml, y, cw, avail, fill=card_fill, radius=0.06)
+        pad = 0.34
+        iy = y + pad
+        ih = avail - 2 * pad
+        # a leading label ('WHAT AI71 BRINGS') becomes a section header + rule
+        if items and _is_label(items[0]):
+            _section_label(slide, B, ml + pad, iy, cw - 2 * pad, items[0], on_dark)
+            iy += 0.42
+            ih -= 0.42
+            items = items[1:]
+        _render_icon_list(slide, deck, B, ml + pad, iy, cw - 2 * pad, ih, items, icons, on_dark)
+    elif items:
+        specs = [s for p in items if (s := _para_spec_one(p, B, B.ink))]
+        add_text(slide, ml, y, cw, max(0.6, avail), specs, anchor=MSO_ANCHOR.TOP, autofit=True)
+
     _footer(slide, deck, plan, B, on_dark=False)
 
 
@@ -398,12 +536,17 @@ BUILDERS = {"title": build_title, "closing": build_closing, "section": build_sec
 
 
 def compose(deck: DeckIR, brand: BrandSpec) -> Presentation:
+    from .designsystem import apply_theme
+    from .assets import make_contour_texture, recolor_icon
     prs = Presentation()
     prs.slide_width = Emu(deck.width_emu)
     prs.slide_height = Emu(deck.height_emu)
+    apply_theme(prs, brand)   # master carries the derived fonts + palette
     blank = prs.slide_layouts[6]
+    texture = make_contour_texture(1280, 720, brand.dark, C.mix(brand.dark, "FFFFFF", 0.22))
     for s in deck.slides:
         plan = classify_slide(s, deck)
+        icons = [b for p in plan.pictures if p.image_blob and (b := recolor_icon(p.image_blob, brand.accent))]
         slide = prs.slides.add_slide(blank)
-        BUILDERS.get(plan.stype, build_content)(slide, deck, plan, brand)
+        BUILDERS.get(plan.stype, build_content)(slide, deck, plan, brand, icons, texture)
     return prs

@@ -151,6 +151,13 @@ def render(path, out_prefix, only=None):
         d = ImageDraw.Draw(img)
         for sh in slide.shapes:
             try:
+                if sh.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                    import io as _io
+                    pic = Image.open(_io.BytesIO(sh.image.blob)).convert("RGBA")
+                    x, y, w, h = px(sh.left), px(sh.top), px(sh.width), px(sh.height)
+                    pic = pic.resize((max(1, w), max(1, h)))
+                    img.paste(pic, (x, y), pic)
+                    continue
                 if sh.shape_type == MSO_SHAPE_TYPE.TABLE or getattr(sh, "has_table", False):
                     draw_table(d, sh); continue
                 fc = shape_fill(sh)
