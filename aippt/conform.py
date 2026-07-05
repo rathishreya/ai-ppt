@@ -18,6 +18,7 @@ from .ir import DeckIR, ShapeIR, ParaIR, RunIR
 from .brand import BrandSpec
 from .classify import classify_slide, SlidePlan
 from .designsystem import apply_theme
+from pptx.enum.text import MSO_AUTO_SIZE
 
 # placeholder idx constants (standard template)
 CTR_TITLE = TITLE = 0
@@ -50,6 +51,11 @@ def _fill_paras(ph, paras: list[ParaIR]):
     No font/size/color set -> inherits from the layout/master (true conformance)."""
     tf = ph.text_frame
     tf.clear()
+    tf.word_wrap = True
+    try:
+        tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE  # shrink to fit -> never overflow
+    except Exception:
+        pass
     first = True
     wrote = False
     for para in paras:
