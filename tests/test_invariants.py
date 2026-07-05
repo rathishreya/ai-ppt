@@ -9,9 +9,15 @@ SAMPLE = os.path.join(os.path.dirname(__file__), "..", "samples", "AI71", "AI71_
 @pytest.mark.skipif(not os.path.exists(SAMPLE), reason="sample deck not present (gitignored)")
 def test_ai71_invariants(tmp_path):
     from aippt.pipeline import build
-    res = build(SAMPLE, str(tmp_path / "out.pptx"), fail_closed=True)
+    from pptx import Presentation
+    out = str(tmp_path / "out.pptx")
+    res = build(SAMPLE, out, fail_closed=True)
     assert res.report.ok
     assert res.report.slide_count_src == res.report.slide_count_out == 26
+    # every slide must follow the master: content lives in placeholders
+    prs = Presentation(out)
+    for i, slide in enumerate(prs.slides, 1):
+        assert any(sh.is_placeholder for sh in slide.shapes), f"slide {i} has no placeholders"
 
 
 def test_textguard_detects_drop():
