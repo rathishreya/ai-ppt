@@ -1,0 +1,30 @@
+# --- Confidential client material (kept local, not tracked) ---
+# Sample decks are used only for local calibration/QA. They may be
+# confidential client files, so the binaries are intentionally ignored.
+samples/**/*.pptx
+samples/**/*.potx
+samples/**/*.pdf
+samples/**/*.png
+samples/**/*.jpg
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Working / generated artifacts ---
+*.tmp
+out/
+outputs/
+*_render/
+render_cache/
+.DS_Store
