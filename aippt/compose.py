@@ -245,12 +245,14 @@ def _render_icon_list(slide, deck, B, x, y, w, h, items, icons, on_dark):
     text_color = "FFFFFF" if on_dark else B.ink
     lead_color = B.accent
     div_color = "34597B" if on_dark else C.mix(B.neutral, "FFFFFF", 0.35)
+    from .icons import icon_for
     d = min(0.66, row_h * 0.62)
     tx = x + d + 0.28
     tw = w - (d + 0.28) - 0.1
     for i, para in enumerate(items):
         ry = y + i * row_h
-        icon_ring(slide, x, ry + (row_h - d) / 2, d, B.accent, icons[i] if i < len(icons) else None)
+        blob = icon_for(para.text, B.accent, i)
+        icon_ring(slide, x, ry + (row_h - d) / 2, d, B.accent, blob)
         spec = _para_spec_one(para, B, text_color, lead_color=lead_color, space_after=0)
         if spec:
             add_text(slide, tx, ry, tw, row_h, [spec], anchor=MSO_ANCHOR.MIDDLE, autofit=True)
@@ -510,7 +512,7 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
             y = _table(slide, tb, ml, y, cw, B, max_h=a) + 0.15
     elif items and 3 <= len(items) <= 6 and max(lens) <= 115:
         _render_card_grid(slide, deck, B, ml, y, cw, min(avail, 3.6), items)
-    elif items and 2 <= len(items) <= 7 and sum(lens) <= 1500:
+    elif items and 2 <= len(items) <= 8 and sum(lens) <= 2100:
         # icon-list inside a callout card (dark for PHASE slides, light otherwise)
         card_fill = B.dark if on_dark else B.light
         rrect(slide, ml, y, cw, avail, fill=card_fill, radius=0.06)
