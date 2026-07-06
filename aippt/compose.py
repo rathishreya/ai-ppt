@@ -344,23 +344,48 @@ def _render_flow(slide, deck, B, x, y, w, h, items):
         tf.vertical_anchor = MSO_ANCHOR.MIDDLE
 
 
+def _group_for_cards(items):
+    """Merge a short 'header' paragraph with the following longer one so cards carry a
+    heading + body (fewer, better-padded cards instead of many cramped fragments)."""
+    groups, i = [], 0
+    while i < len(items):
+        cur = items[i]
+        nxt = items[i + 1] if i + 1 < len(items) else None
+        if (_para_len(cur) <= 32 and nxt is not None and _para_len(nxt) > 32
+                and not (cur.runs and cur.runs[0].bold)):
+            groups.append([cur, nxt]); i += 2
+        else:
+            groups.append([cur]); i += 1
+    return groups
+
+
 def _render_card_grid(slide, deck, B, x, y, w, h, items):
-    n = len(items)
-    cols = 3 if n in (3, 6, 9) else (2 if n in (2, 4) else min(3, n))
+    groups = _group_for_cards(items)
+    n = len(groups)
+    cols = 3 if n >= 5 else (2 if n in (2, 4) else min(3, max(1, n)))
     rows = math.ceil(n / cols)
-    gap = 0.22
+    gap = 0.26
     cw = (w - gap * (cols - 1)) / cols
     ch = (h - gap * (rows - 1)) / rows
-    for i, para in enumerate(items):
+    padx, pady = 0.32, 0.16
+    for i, paras in enumerate(groups):
         r, c = divmod(i, cols)
         cx, cy = x + c * (cw + gap), y + r * (ch + gap)
-        rrect(slide, cx, cy, cw, ch, fill=B.light, radius=0.08)
-        # accent tab
-        rrect(slide, cx, cy, 0.09, ch, fill=B.accent, radius=0.0)
-        spec = _para_spec_one(para, B, B.ink, size=B.scale["body"], space_after=0)
-        if spec:
-            add_text(slide, cx + 0.24, cy + 0.16, cw - 0.4, ch - 0.32, [spec],
-                     anchor=MSO_ANCHOR.TOP, autofit=True)
+        rrect(slide, cx, cy, cw, ch, fill=B.light, radius=0.07)
+        rrect(slide, cx, cy, 0.08, ch, fill=B.accent, radius=0.0)  # accent tab
+        specs = []
+        for j, para in enumerate(paras):
+            is_head = (j == 0 and len(paras) > 1)
+            sp = _para_spec_one(para, B, B.dark if is_head else B.ink,
+                                size=B.scale["body"], space_after=(3 if is_head else 0))
+            if sp and is_head:
+                for rspec in sp["runs"]:
+                    rspec["bold"] = True
+            if sp:
+                specs.append(sp)
+        if specs:
+            add_text(slide, cx + padx, cy + pady, cw - padx - 0.18, ch - 2 * pady, specs,
+                     anchor=MSO_ANCHOR.MIDDLE, autofit=True)
 
 
 # ---------------------------------------------------------------- footer
@@ -408,7 +433,8 @@ def _table(slide, shape: ShapeIR, x, y, w, B: BrandSpec, max_h: float = 4.6):
             cell = gt.cell(ri, ci)
             cell.fill.solid()
             cell.fill.fore_color.rgb = _rgb(B.dark if ri == 0 else (B.paper if ri % 2 else B.light))
-            cell.margin_top = Pt(2); cell.margin_bottom = Pt(2)
+            cell.margin_left = Pt(7); cell.margin_right = Pt(7)
+            cell.margin_top = Pt(3); cell.margin_bottom = Pt(3)
             cell.vertical_anchor = MSO_ANCHOR.MIDDLE
             runs = row[ci] if ci < len(row) else []
             tf = cell.text_frame
@@ -563,13 +589,13 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
                    "font": B.body_font, "color": B.secondary, "bold": True, "tracking": 2.0,
                    "space_after": 0}])
         y += 0.34
-    # title -> real TITLE placeholder (follows the master). Serif wraps wide -> reserve room.
+    # title -> real TITLE placeholder (follows the master).
     if plan.title:
-        th = _block_h_in(plan.title.text, B.scale["h1"], cw, line_spacing=1.12, cw_factor=0.58)
+        th = _block_h_in(plan.title.text, B.scale["h1"], cw, line_spacing=1.1, cw_factor=0.53)
         _fill_ph(slide, TITLE_IDX, ml, y, cw, th + 0.08,
                  [{"runs": [{"text": plan.title.text.replace("\n", " ")}], "size": B.scale["h1"],
-                   "font": B.heading_font, "color": B.dark, "line_spacing": 1.08, "space_after": 0}])
-        y += th + 0.14
+                   "font": B.heading_font, "color": B.dark, "line_spacing": 1.06, "space_after": 0}])
+        y += th + 0.12
     hrule(slide, ml, y, 0.7, B.accent, 2.4)
     y += 0.18
     # subtitle
