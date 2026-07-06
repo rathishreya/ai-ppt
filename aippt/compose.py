@@ -404,11 +404,27 @@ def _columns_from_shapes(plan, deck):
     return wide, cols
 
 
-def _render_columns(slide, deck, B, x, y, w, h, columns, B_dark=False):
-    """Render source columns side by side as light cards (header + items), preserving structure."""
+def _fit_font(paras, base, text_w, avail_h, per_para_gap=0.07, min_size=7.5):
+    """Largest font (<= base) at which all paragraphs fit avail_h. We compute this explicitly
+    because python-pptx's auto-fit has no scale factor and viewers don't reliably shrink it."""
+    def total_h(sz):
+        lh = sz * 1.34 / 72.0
+        return sum(_est_lines(p.text, sz, text_w, 0.52) * lh + per_para_gap for p in paras)
+    sz = base
+    for _ in range(16):
+        if total_h(sz) <= avail_h or sz <= min_size:
+            break
+        sz = max(min_size, sz - 0.5)
+    return sz
+
+
+def _render_columns(slide, deck, B, x, y, w, h, columns):
+    """Render source columns side by side as light cards (header + items), preserving structure.
+    Font size is computed to fit each column's height (reliable, unlike auto-fit)."""
     n = len(columns)
     gap = 0.24
     cw = (w - gap * (n - 1)) / n
+    text_w = cw - 0.5
     for ci, col in enumerate(columns):
         cx = x + ci * (cw + gap)
         paras = [p for sh in col for p in sh.paras if p.text.strip()]
@@ -416,19 +432,18 @@ def _render_columns(slide, deck, B, x, y, w, h, columns, B_dark=False):
             continue
         rrect(slide, cx, y, cw, h, fill=B.light, radius=0.07)
         rrect(slide, cx, y, 0.08, h, fill=B.accent, radius=0.0)
+        size = _fit_font(paras, B.scale["body"], text_w, h - 0.36)
         specs = []
         for j, para in enumerate(paras):
             is_head = (j == 0)
-            sp = _para_spec_one(para, B, B.dark if is_head else B.ink,
-                                size=(B.scale["body"] + 1 if is_head else B.scale["body"]),
-                                space_after=(5 if is_head else 4))
+            sp = _para_spec_one(para, B, B.dark if is_head else B.ink, size=size,
+                                space_after=(4 if is_head else 3))
             if sp and is_head:
                 for r in sp["runs"]:
                     r["bold"] = True; r["color"] = B.dark
             if sp:
                 specs.append(sp)
-        add_text(slide, cx + 0.26, y + 0.18, cw - 0.44, h - 0.36, specs,
-                 anchor=MSO_ANCHOR.TOP, autofit=True)
+        add_text(slide, cx + 0.26, y + 0.16, cw - 0.44, h - 0.3, specs, anchor=MSO_ANCHOR.TOP)
 
 
 def _render_card_grid(slide, deck, B, x, y, w, h, items):
@@ -724,16 +739,29 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
 
     if mode == "columns":
         wide, columns = cols_data
-        # full-width headers become a compact intro block above the columns
-        wparas = [p for s in wide for p in s.paras if p.text.strip()]
-        if wparas:
-            wh = min(_block_h_in(" ".join(p.text for p in wparas), B.scale["body"], cw,
-                                 cw_factor=0.53) + 0.1, 0.95)
-            wspecs = [s for p in wparas if (s := _para_spec_one(p, B, B.ink))]
-            add_text(slide, ml, y, cw, wh, wspecs, anchor=MSO_ANCHOR.TOP, autofit=True)
-            y += wh + 0.16
-            avail = footer_top - y
+        col_shapes = [s for c in columns for s in c]
+        col_top = (min((s.top or 0) for s in col_shapes) / IN) if col_shapes else 99
+        top_wide = [s for s in wide if (s.top or 0) / IN < col_top - 0.1]
+        bot_wide = [s for s in wide if s not in top_wide]
+        # top intro block (font fitted so it can't overflow into the columns)
+        tparas = [p for s in top_wide for p in s.paras if p.text.strip()]
+        if tparas:
+            wh = 0.9
+            tsize = _fit_font(tparas, B.scale["body"], cw, wh, per_para_gap=0.02)
+            wspecs = [s for p in tparas if (s := _para_spec_one(p, B, B.ink, size=tsize))]
+            add_text(slide, ml, y, cw, wh, wspecs, anchor=MSO_ANCHOR.TOP)
+            y += wh + 0.12
+        # wide shapes below the columns become a bottom bar
+        bparas = [p for s in bot_wide for p in s.paras if p.text.strip()]
+        bot_h = 0.64 if bparas else 0.0
+        avail = footer_top - y - (bot_h + 0.14 if bot_h else 0)
         _render_columns(slide, deck, B, ml, y, cw, avail, columns)
+        if bparas:
+            by = footer_top - bot_h
+            rrect(slide, ml, by, cw, bot_h, fill=B.light, radius=0.08)
+            bsize = _fit_font(bparas, B.scale["body"], cw - 0.5, bot_h - 0.16, per_para_gap=0.02)
+            bspecs = [s for p in bparas if (s := _para_spec_one(p, B, B.ink, size=bsize))]
+            add_text(slide, ml + 0.24, by + 0.08, cw - 0.44, bot_h - 0.16, bspecs, anchor=MSO_ANCHOR.MIDDLE)
     elif mode == "table":
         tb = plan.tables[0]
         nrows = len(tb.table) if tb.table else 0
