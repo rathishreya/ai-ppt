@@ -222,10 +222,10 @@ def _fill_ph(slide, idx, x, y, w, h, paras, *, anchor=MSO_ANCHOR.TOP, autofit=Fa
 
 # ---------------------------------------------------------------- text estimation
 
-def _est_lines(text: str, size_pt: float, width_in: float) -> int:
+def _est_lines(text: str, size_pt: float, width_in: float, cw_factor: float = 0.52) -> int:
     if not text.strip():
         return 1
-    char_w_in = size_pt * 0.50 / 72.0
+    char_w_in = size_pt * cw_factor / 72.0
     cpl = max(8, int(width_in / char_w_in))
     lines = 0
     for seg in text.split("\n"):
@@ -233,8 +233,8 @@ def _est_lines(text: str, size_pt: float, width_in: float) -> int:
     return lines
 
 
-def _block_h_in(text, size_pt, width_in, line_spacing=1.12, pad=0.06) -> float:
-    return _est_lines(text, size_pt, width_in) * (size_pt * line_spacing / 72.0) + pad
+def _block_h_in(text, size_pt, width_in, line_spacing=1.16, pad=0.08, cw_factor=0.52) -> float:
+    return _est_lines(text, size_pt, width_in, cw_factor) * (size_pt * line_spacing / 72.0) + pad
 
 
 # ---------------------------------------------------------------- body rendering
@@ -393,13 +393,23 @@ def _table(slide, shape: ShapeIR, x, y, w, B: BrandSpec, max_h: float = 4.6):
     grid = shape.table
     rows, cols = len(grid), max(len(r) for r in grid)
     h = min(max_h, 0.42 * rows + 0.1)
+    # scale cell font so tall tables fit the allotted height (avoid footer collision)
+    row_h = h / max(rows, 1)
+    fsize = max(7.5, min(B.scale["small"], round(row_h * 72 * 0.28, 1)))
     gt = slide.shapes.add_table(rows, cols, _emu(x), _emu(y), _emu(w), _emu(h)).table
     gt.first_row = True
+    from pptx.util import Emu as _E
     for ri, row in enumerate(grid):
+        try:
+            gt.rows[ri].height = _E(int(row_h * IN))
+        except Exception:
+            pass
         for ci in range(cols):
             cell = gt.cell(ri, ci)
             cell.fill.solid()
             cell.fill.fore_color.rgb = _rgb(B.dark if ri == 0 else (B.paper if ri % 2 else B.light))
+            cell.margin_top = Pt(2); cell.margin_bottom = Pt(2)
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
             runs = row[ci] if ci < len(row) else []
             tf = cell.text_frame
             tf.word_wrap = True
@@ -407,7 +417,7 @@ def _table(slide, shape: ShapeIR, x, y, w, B: BrandSpec, max_h: float = 4.6):
             if runs:
                 for r in runs:
                     rr = p.add_run(); rr.text = r.text
-                    rr.font.size = Pt(B.scale["small"])
+                    rr.font.size = Pt(fsize)
                     rr.font.name = B.body_font
                     rr.font.bold = (ri == 0)
                     rr.font.color.rgb = _rgb("FFFFFF" if ri == 0 else B.ink)
@@ -544,6 +554,7 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
     bg(slide, deck, B.paper)
     ml, mr, mt = 0.62, 0.62, 0.5
     cw = deck.width_in - ml - mr
+    footer_top = deck.height_in - 0.66
     y = mt
     # eyebrow
     if plan.eyebrow:
@@ -551,25 +562,24 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
                  [{"runs": [{"text": plan.eyebrow.text.strip()}], "size": B.scale["eyebrow"],
                    "font": B.body_font, "color": B.secondary, "bold": True, "tracking": 2.0,
                    "space_after": 0}])
-        y += 0.32
-    # title -> real TITLE placeholder (follows the master)
+        y += 0.34
+    # title -> real TITLE placeholder (follows the master). Serif wraps wide -> reserve room.
     if plan.title:
-        th = _block_h_in(plan.title.text, B.scale["h1"], cw, 1.06)
-        _fill_ph(slide, TITLE_IDX, ml, y, cw, th + 0.15,
+        th = _block_h_in(plan.title.text, B.scale["h1"], cw, line_spacing=1.12, cw_factor=0.58)
+        _fill_ph(slide, TITLE_IDX, ml, y, cw, th + 0.08,
                  [{"runs": [{"text": plan.title.text.replace("\n", " ")}], "size": B.scale["h1"],
-                   "font": B.heading_font, "color": B.dark, "line_spacing": 1.05, "space_after": 0}])
-        y += th + 0.10
+                   "font": B.heading_font, "color": B.dark, "line_spacing": 1.08, "space_after": 0}])
+        y += th + 0.14
     hrule(slide, ml, y, 0.7, B.accent, 2.4)
-    y += 0.16
+    y += 0.18
     # subtitle
     if plan.subtitle:
-        sh = _block_h_in(plan.subtitle.text, B.scale["subtitle"], cw, 1.2)
-        add_text(slide, ml, y, cw, sh + 0.1,
+        sh = _block_h_in(plan.subtitle.text, B.scale["subtitle"], cw, line_spacing=1.2, cw_factor=0.53)
+        add_text(slide, ml, y, cw, sh + 0.05,
                  [{"runs": [{"text": plan.subtitle.text.replace("\n", " ")}], "size": B.scale["subtitle"],
-                   "font": B.body_font, "color": B.neutral, "line_spacing": 1.18, "space_after": 0}])
-        y += sh + 0.16
+                   "font": B.body_font, "color": B.neutral, "line_spacing": 1.2, "space_after": 0}])
+        y += sh + 0.18
 
-    body_bottom = deck.height_in - 0.62
     items = _body_items(plan)
 
     # a long, non-lead leading paragraph becomes a callout bar
@@ -578,49 +588,45 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
         callout = items[0]
         items = items[1:]
     if callout:
-        chh = _block_h_in(callout.text, B.scale["body"], cw - 0.5, 1.2) + 0.2
-        chh = min(chh, 1.3)
+        chh = min(_block_h_in(callout.text, B.scale["body"], cw - 0.5, cw_factor=0.53) + 0.18, 1.25)
         rrect(slide, ml, y, cw, chh, fill=B.light, radius=0.10)
         spec = _para_spec_one(callout, B, B.ink, space_after=0)
-        add_text(slide, ml + 0.25, y + 0.1, cw - 0.5, chh - 0.2, [spec], anchor=MSO_ANCHOR.MIDDLE, autofit=True)
-        y += chh + 0.22
+        add_text(slide, ml + 0.25, y + 0.08, cw - 0.5, chh - 0.16, [spec], anchor=MSO_ANCHOR.MIDDLE, autofit=True)
+        y += chh + 0.20
 
-    avail = body_bottom - y
+    avail = footer_top - y
     lens = [_para_len(p) for p in items] or [0]
     on_dark = bool(plan.eyebrow and plan.eyebrow.text.strip().upper().startswith("PHASE"))
 
     if plan.tables:
-        # table slide: compact body list above the table
+        # table slide: compact narrative above a table that STRICTLY fits above the footer
+        tb = plan.tables[0]
+        nrows = len(tb.table) if tb.table else 0
         if items:
-            specs = [s for p in items if (s := _para_spec_one(p, B, B.ink))]
-            bh = min(avail * 0.45, 2.2)
-            add_text(slide, ml, y, cw, max(0.5, bh), specs, anchor=MSO_ANCHOR.TOP, autofit=True)
-            y += bh + 0.18
-        for tb in plan.tables:
-            a = body_bottom - y
-            if a < 0.9:
-                y = body_bottom - 0.9; a = 0.9
-            y = _table(slide, tb, ml, y, cw, B, max_h=a) + 0.15
-    elif items and 3 <= len(items) <= 6 and max(lens) <= 42:
-        _render_flow(slide, deck, B, ml, y + 0.25, cw, min(avail, 1.7), items)
+            specs = [s for p in items if (s := _para_spec_one(p, B, B.ink, size=B.scale["small"]))]
+            # give big tables more room by shrinking the narrative band
+            frac = 0.22 if nrows >= 7 else 0.32
+            bh = min((footer_top - y) * frac, 1.4)
+            add_text(slide, ml, y, cw, max(0.35, bh), specs, anchor=MSO_ANCHOR.TOP, autofit=True)
+            y += bh + 0.12
+        tmax = footer_top - y - 0.05
+        if tmax >= 0.7:
+            _table(slide, tb, ml, y, cw, B, max_h=tmax)
+    elif items and 3 <= len(items) <= 6 and max(lens) <= 40:
+        _render_flow(slide, deck, B, ml, y + 0.2, cw, min(avail, 1.7), items)
     elif items and 3 <= len(items) <= 6 and max(lens) <= 115:
-        _render_card_grid(slide, deck, B, ml, y, cw, min(avail, 3.6), items)
+        _render_card_grid(slide, deck, B, ml, y, cw, min(avail, 3.8), items)
     elif items and 2 <= len(items) <= 8 and sum(lens) <= 2100:
-        # icon-list inside a callout card (dark for PHASE slides, light otherwise)
         card_fill = B.dark if on_dark else B.light
         rrect(slide, ml, y, cw, avail, fill=card_fill, radius=0.06)
         pad = 0.34
-        iy = y + pad
-        ih = avail - 2 * pad
-        # a leading label ('WHAT AI71 BRINGS') becomes a section header + rule
+        iy, ih = y + pad, avail - 2 * pad
         if items and _is_label(items[0]):
             _section_label(slide, B, ml + pad, iy, cw - 2 * pad, items[0], on_dark)
-            iy += 0.42
-            ih -= 0.42
+            iy += 0.42; ih -= 0.42
             items = items[1:]
         _render_icon_list(slide, deck, B, ml + pad, iy, cw - 2 * pad, ih, items, icons, on_dark)
     elif items:
-        # consistency: never a plain wall of text -> multi-column cards
         _render_card_grid(slide, deck, B, ml, y, cw, min(avail, 4.3), items)
 
     _footer(slide, deck, plan, B, on_dark=False)
