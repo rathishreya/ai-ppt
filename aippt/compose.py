@@ -33,6 +33,29 @@ def _emu(v_in: float) -> Emu:
     return Emu(int(round(v_in * IN)))
 
 
+def _clean(s: str) -> str:
+    """Drop source glyphs that render as tofu boxes (Wingdings/private-use/control chars)
+    and normalise tabs so preserved text stays legible. Never changes real words."""
+    if not s:
+        return s
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if ch in "\t":
+            out.append("   ")
+        elif ch in "\n\r":
+            out.append(ch)
+        elif o < 0x20:
+            continue
+        elif 0xE000 <= o <= 0xF8FF:      # private-use area (Wingdings-mapped icons)
+            continue
+        elif o in (0xFFFC, 0xFFFD):      # object-replacement / replacement char
+            continue
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _rgb(hex_: str) -> RGBColor:
     return RGBColor.from_string(hex_.lstrip("#"))
 
@@ -159,7 +182,7 @@ def _write_paras(tf, paras):
         base_font = spec.get("font")
         for rspec in spec["runs"]:
             r = p.add_run()
-            r.text = rspec["text"]
+            r.text = _clean(rspec["text"])
             f = r.font
             f.name = rspec.get("font", base_font)
             f.size = Pt(rspec.get("size", base_size))
@@ -549,7 +572,7 @@ def _table(slide, shape: ShapeIR, x, y, w, B: BrandSpec, max_h: float = 4.6):
             p = tf.paragraphs[0]
             if runs:
                 for r in runs:
-                    rr = p.add_run(); rr.text = r.text
+                    rr = p.add_run(); rr.text = _clean(r.text)
                     rr.font.size = Pt(fsize)
                     rr.font.name = B.body_font
                     rr.font.bold = (ri == 0)
@@ -732,9 +755,11 @@ def build_content(slide, deck, plan, B, icons=None, texture=None, draw_bg=True, 
             intro = items[0]; items = items[1:]
         lens = [_para_len(p) for p in items] or [0]
         has_label = bool(items and _is_label(items[0]))
+        # formulas / equations are never a process flow — they must stay stacked & legible
+        formulaic = any("=" in p.text for p in items)
         if plan.tables:
             mode = "table"
-        elif items and 3 <= len(items) <= 6 and max(lens) <= 40:
+        elif items and 3 <= len(items) <= 6 and max(lens) <= 40 and not formulaic:
             mode = "flow"
         elif items and 2 <= len(items) <= 8 and sum(lens) <= 2100 and max(lens) > 40:
             mode = "iconlist"

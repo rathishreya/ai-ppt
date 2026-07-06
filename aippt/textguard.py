@@ -15,8 +15,22 @@ from .ir import DeckIR, SlideIR
 _WS = re.compile(r"\s+")
 
 
+def _strip_glyphs(s: str) -> str:
+    """Decorative glyphs (Wingdings/private-use icons, object-replacement, control chars) are
+    NOT text — the compose step drops them, so the guard ignores them on BOTH sides to stay fair."""
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if o < 0x20 and ch not in "\t\n\r":
+            continue
+        if 0xE000 <= o <= 0xF8FF or o in (0xFFFC, 0xFFFD):
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
 def _norm(s: str) -> str:
-    return _WS.sub(" ", s).strip()
+    return _WS.sub(" ", _strip_glyphs(s)).strip()
 
 
 def slide_words(slide: SlideIR) -> Counter:
@@ -30,7 +44,7 @@ def slide_words(slide: SlideIR) -> Counter:
 
 
 def slide_charcount(slide: SlideIR) -> int:
-    return sum(len(_WS.sub("", sh.text)) for sh in slide.shapes)
+    return sum(len(_WS.sub("", _strip_glyphs(sh.text))) for sh in slide.shapes)
 
 
 @dataclass

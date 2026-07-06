@@ -55,23 +55,47 @@ def classify_slide(slide: SlideIR, deck: DeckIR) -> SlidePlan:
 
     pool = [s for s in texts if s is not plan.wordmark and s not in plan.footers]
 
-    # title: the largest text on the slide (tie-break: higher up)
-    if pool:
+    # The master puts a recurring HEADER (topic line) in a fixed top band. It is the
+    # slide's title *per the master* even though it is rarely the biggest font on the slide.
+    header = None
+    band = [s for s in pool if (s.top or 0) < 0.10 * H]
+    if band:
+        header = min(band, key=lambda s: (s.top or 0))
+
+    # A headline is a SINGLE dominant block below the header (e.g. "Minimum Tasks:").
+    # If several shapes share the largest font, they are a list/group — NOT a headline,
+    # so the header stays the title and those shapes fall to the body.
+    lower = [s for s in pool if s is not header]
+    headline = None
+    if lower:
+        mx = max(round(s.max_size_pt, 1) for s in lower)
+        biggest = [s for s in lower if round(s.max_size_pt, 1) >= mx - 0.6]
+        cand = min(biggest, key=lambda s: (s.top or 0))
+        t = cand.text.strip()
+        looks_listy = t[:1] in "-•*·(" or t[:2] in ("1.", "2.", "3.", "4.")
+        if len(biggest) == 1 and not looks_listy and cand.plain_len <= 120 \
+                and (header is None or mx >= (header.max_size_pt or 0)):
+            headline = cand
+
+    if headline is not None:
+        plan.title, plan.eyebrow = headline, header
+    elif header is not None:
+        plan.title = header
+    elif pool:
         plan.title = max(pool, key=lambda s: (round(s.max_size_pt, 1), -(s.top or 0)))
 
-    # eyebrow: short line at/above the title
-    if plan.title:
-        ty = plan.title.top or 0
-        above = [s for s in pool if s is not plan.title and (s.top or 0) <= ty + 1 and s.plain_len <= 52]
-        if above:
-            plan.eyebrow = min(above, key=lambda s: abs((s.top or 0) - ty))
-
-    # subtitle: the block right below the title, not tiny, smaller-or-equal to title
+    # subtitle: a genuine lead SENTENCE right below the title — never a formula/list sibling.
     if plan.title:
         below = sorted([s for s in pool if s not in (plan.title, plan.eyebrow)
                         and (s.top or 0) > (plan.title.top or 0)], key=_pos)
-        if below and below[0].plain_len >= 18 and below[0].max_size_pt <= plan.title.max_size_pt:
-            plan.subtitle = below[0]
+        if below:
+            b0 = below[0]
+            alone = sum(1 for s in below if abs(s.max_size_pt - b0.max_size_pt) < 1) == 1
+            formulaic = ("\t" in b0.text) or ("=" in b0.text)
+            single_para = len([p for p in b0.paras if p.text.strip()]) <= 1
+            if b0.plain_len >= 18 and b0.max_size_pt <= plan.title.max_size_pt \
+                    and alone and single_para and not formulaic:
+                plan.subtitle = b0
 
     plan.body = [s for s in pool if s not in (plan.title, plan.eyebrow, plan.subtitle)]
     plan.body.sort(key=_pos)
