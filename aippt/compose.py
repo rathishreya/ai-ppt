@@ -370,6 +370,67 @@ def _group_for_cards(items):
     return groups
 
 
+def _columns_from_shapes(plan, deck):
+    """Detect the source's real column layout from body-shape x-positions.
+    Returns (wide_headers, columns) where columns is a left-to-right list of shape-lists
+    (each top-ordered), or None if there aren't clear columns."""
+    W = deck.width_emu
+    body = [s for s in plan.body if s.plain_len > 0]
+    narrow = [s for s in body if (s.width or 0) < 0.55 * W]
+    wide = [s for s in body if (s.width or 0) >= 0.55 * W]
+    if len(narrow) < 3:
+        return None
+    lefts = sorted(set(round((s.left or 0) / IN, 2) for s in narrow))
+    bands = []
+    for L in lefts:
+        if bands and L - bands[-1][-1] < 1.6:
+            bands[-1].append(L)
+        else:
+            bands.append([L])
+    if not (2 <= len(bands) <= 4):
+        return None
+    centers = [(b[0] + b[-1]) / 2 for b in bands]
+
+    def band_of(s):
+        L = (s.left or 0) / IN
+        return min(range(len(centers)), key=lambda i: abs(L - centers[i]))
+
+    cols = [[] for _ in bands]
+    for s in sorted(narrow, key=lambda s: (s.top or 0)):
+        cols[band_of(s)].append(s)
+    cols = [c for c in cols if c]
+    if len(cols) < 2 or max(len(c) for c in cols) < 1:
+        return None
+    return wide, cols
+
+
+def _render_columns(slide, deck, B, x, y, w, h, columns, B_dark=False):
+    """Render source columns side by side as light cards (header + items), preserving structure."""
+    n = len(columns)
+    gap = 0.24
+    cw = (w - gap * (n - 1)) / n
+    for ci, col in enumerate(columns):
+        cx = x + ci * (cw + gap)
+        paras = [p for sh in col for p in sh.paras if p.text.strip()]
+        if not paras:
+            continue
+        rrect(slide, cx, y, cw, h, fill=B.light, radius=0.07)
+        rrect(slide, cx, y, 0.08, h, fill=B.accent, radius=0.0)
+        specs = []
+        for j, para in enumerate(paras):
+            is_head = (j == 0)
+            sp = _para_spec_one(para, B, B.dark if is_head else B.ink,
+                                size=(B.scale["body"] + 1 if is_head else B.scale["body"]),
+                                space_after=(5 if is_head else 4))
+            if sp and is_head:
+                for r in sp["runs"]:
+                    r["bold"] = True; r["color"] = B.dark
+            if sp:
+                specs.append(sp)
+        add_text(slide, cx + 0.26, y + 0.18, cw - 0.44, h - 0.36, specs,
+                 anchor=MSO_ANCHOR.TOP, autofit=True)
+
+
 def _render_card_grid(slide, deck, B, x, y, w, h, items):
     groups = _group_for_cards(items)
     n = len(groups)
@@ -621,24 +682,28 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
     hrule(slide, ml, y, 0.7, B.accent, 2.4)
     y += 0.18
     items = _body_items(plan)
-    # a long, non-lead leading paragraph = intro (rendered as a callout bar)
+    cols_data = None if plan.tables else _columns_from_shapes(plan, deck)
     intro = None
-    if items and _para_len(items[0]) >= 90 and not (items[0].runs and items[0].runs[0].bold):
-        intro = items[0]; items = items[1:]
-    lens = [_para_len(p) for p in items] or [0]
-    has_label = bool(items and _is_label(items[0]))
-
-    # decide body mode up front (so the subtitle can adapt)
-    if plan.tables:
-        mode = "table"
-    elif items and 3 <= len(items) <= 6 and max(lens) <= 40:
-        mode = "flow"
-    elif items and 2 <= len(items) <= 8 and sum(lens) <= 2100 and max(lens) > 40:
-        mode = "iconlist"
-    elif items:
-        mode = "grid"
+    has_label = False
+    lens = [0]
+    if cols_data:
+        mode = "columns"
     else:
-        mode = "none"
+        # a long, non-lead leading paragraph = intro (rendered as a callout bar)
+        if items and _para_len(items[0]) >= 90 and not (items[0].runs and items[0].runs[0].bold):
+            intro = items[0]; items = items[1:]
+        lens = [_para_len(p) for p in items] or [0]
+        has_label = bool(items and _is_label(items[0]))
+        if plan.tables:
+            mode = "table"
+        elif items and 3 <= len(items) <= 6 and max(lens) <= 40:
+            mode = "flow"
+        elif items and 2 <= len(items) <= 8 and sum(lens) <= 2100 and max(lens) > 40:
+            mode = "iconlist"
+        elif items:
+            mode = "grid"
+        else:
+            mode = "none"
     is_phase = bool(plan.eyebrow and plan.eyebrow.text.strip().upper().startswith("PHASE"))
     on_dark = mode == "iconlist" and (is_phase or has_label or intro is not None)
 
@@ -657,7 +722,19 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
 
     avail = footer_top - y
 
-    if mode == "table":
+    if mode == "columns":
+        wide, columns = cols_data
+        # full-width headers become a compact intro block above the columns
+        wparas = [p for s in wide for p in s.paras if p.text.strip()]
+        if wparas:
+            wh = min(_block_h_in(" ".join(p.text for p in wparas), B.scale["body"], cw,
+                                 cw_factor=0.53) + 0.1, 0.95)
+            wspecs = [s for p in wparas if (s := _para_spec_one(p, B, B.ink))]
+            add_text(slide, ml, y, cw, wh, wspecs, anchor=MSO_ANCHOR.TOP, autofit=True)
+            y += wh + 0.16
+            avail = footer_top - y
+        _render_columns(slide, deck, B, ml, y, cw, avail, columns)
+    elif mode == "table":
         tb = plan.tables[0]
         nrows = len(tb.table) if tb.table else 0
         if items:
