@@ -24,7 +24,7 @@ def render_icon(name: str, hex_: str, sz: int = 240) -> bytes:
     img = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     col = _rgb(hex_) + (255,)
-    lw = max(6, sz // 16)
+    lw = max(4, sz // 22)
     S = sz
 
     def L(x1, y1, x2, y2, w=lw):
@@ -128,6 +128,12 @@ def render_icon(name: str, hex_: str, sz: int = 240) -> bytes:
         L(0.20, 0.5, 0.74, 0.5); L(0.74, 0.5, 0.60, 0.38); L(0.74, 0.5, 0.60, 0.62)
     elif n == "coin":
         C(0.5, 0.5, 0.30); L(0.5, 0.34, 0.5, 0.66); C(0.5, 0.5, 0.14)
+    elif n == "mail":
+        R(0.18, 0.30, 0.82, 0.70, 0.03)
+        P([(0.18, 0.33), (0.5, 0.54), (0.82, 0.33)], closed=False)
+    elif n == "globe":
+        C(0.5, 0.5, 0.30); L(0.20, 0.5, 0.80, 0.5)
+        d.ellipse([0.36 * S, 0.20 * S, 0.64 * S, 0.80 * S], outline=col, width=lw)
     else:  # generic mark
         C(0.5, 0.5, 0.18, fill=True)
 
