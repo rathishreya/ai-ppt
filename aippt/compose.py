@@ -331,29 +331,52 @@ def _section_label(slide, B, x, y, w, para, on_dark):
     hrule(slide, x + 2.7, y + 0.14, w - 2.7, rule_col, 0.9)
 
 
+def _vline(slide, x, y, h, hex_, weight=0.9):
+    ln = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, _emu(x), _emu(y), _emu(x), _emu(y + h))
+    ln.line.color.rgb = _rgb(hex_)
+    ln.line.width = Pt(weight)
+    ln.shadow.inherit = False
+    return ln
+
+
+def _dot(slide, cx, cy, d, fill_hex, line_hex=None, line_w=1.0):
+    sp = slide.shapes.add_shape(MSO_SHAPE.OVAL, _emu(cx - d / 2), _emu(cy - d / 2), _emu(d), _emu(d))
+    if fill_hex:
+        _solid(sp, fill_hex)
+    else:
+        sp.fill.background()
+    if line_hex:
+        sp.line.color.rgb = _rgb(line_hex); sp.line.width = Pt(line_w)
+    else:
+        _no_line(sp)
+    sp.shadow.inherit = False
+    return sp
+
+
 def _render_icon_list(slide, deck, B, x, y, w, h, items, icons, on_dark):
+    """Premium timeline list: a gold rail with ringed node dots, quiet hairline dividers."""
     n = max(1, len(items))
     row_h = h / n
     text_color = "FFFFFF" if on_dark else B.ink
-    lead_color = B.accent
-    div_color = "34597B" if on_dark else C.mix(B.neutral, "FFFFFF", 0.35)
-    from .icons import icon_for
-    d = min(0.72, row_h * 0.66)
-    arrow_x = x + d + 0.12
-    asz = 0.06
-    tx = x + d + 0.42
+    accent = B.accent
+    div_color = "3C5C78" if on_dark else C.mix(B.neutral, "FFFFFF", 0.55)
+    railx = x + 0.24
+    tx = railx + 0.5
     tw = w - (tx - x) - 0.05
+    halo = C.mix(accent, B.dark if on_dark else "FFFFFF", 0.72)
+    # continuous gold rail down the left
+    _vline(slide, railx, y + row_h * 0.10, h - row_h * 0.20, C.mix(accent, B.dark if on_dark else B.paper, 0.30), 0.9)
     for i, para in enumerate(items):
         ry = y + i * row_h
         cy = ry + row_h / 2
-        blob = icon_for(para.text, B.accent, i)
-        icon_ring(slide, x, cy - d / 2, d, B.accent, blob)
-        _chevron_arrow(slide, arrow_x, cy, asz, B.accent)
-        spec = _para_spec_one(para, B, text_color, lead_color=lead_color, space_after=0)
+        _dot(slide, railx, cy, 0.30, halo)                 # soft outer halo
+        _dot(slide, railx, cy, 0.15, None, line_hex=accent, line_w=1.4)  # gold ring
+        _dot(slide, railx, cy, 0.06, accent)               # gold core
+        spec = _para_spec_one(para, B, text_color, lead_color=accent, space_after=0)
         if spec:
             add_text(slide, tx, ry, tw, row_h, [spec], anchor=MSO_ANCHOR.MIDDLE, autofit=True)
         if i < n - 1:
-            hrule(slide, tx, ry + row_h, tw, div_color, 0.9, dash="dash")
+            hrule(slide, tx, ry + row_h, tw - 0.1, div_color, 0.6)
 
 
 def _chevron_arrow(slide, cx, cy, s, hex_):
@@ -496,26 +519,30 @@ def _render_card_grid(slide, deck, B, x, y, w, h, items):
     gap = 0.26
     cw = (w - gap * (cols - 1)) / cols
     ch = (h - gap * (rows - 1)) / rows
-    padx, pady = 0.32, 0.16
+    padx, pady = 0.34, 0.22
+    fill = C.mix(B.light, "FFFFFF", 0.45)
+    border = C.mix(B.accent, "FFFFFF", 0.55)
     for i, paras in enumerate(groups):
         r, c = divmod(i, cols)
         cx, cy = x + c * (cw + gap), y + r * (ch + gap)
-        rrect(slide, cx, cy, cw, ch, fill=B.light, radius=0.07)
-        rrect(slide, cx, cy, 0.08, ch, fill=B.accent, radius=0.0)  # accent tab
-        fsz = _fit_font(paras, B.scale["body"], cw - padx - 0.18, ch - 2 * pady)
+        rrect(slide, cx, cy, cw, ch, fill=fill, radius=0.06, line=border, line_w=0.75)
+        hrule(slide, cx + 0.24, cy, min(0.7, cw * 0.4), B.accent, 2.0)  # gold top rule
+        fsz = _fit_font(paras, B.scale["body"], cw - padx - 0.2, ch - 2 * pady)
         specs = []
         for j, para in enumerate(paras):
             is_head = (j == 0 and len(paras) > 1)
             sp = _para_spec_one(para, B, B.dark if is_head else B.ink,
-                                size=fsz, space_after=(3 if is_head else 0))
+                                size=(fsz + 2 if is_head else fsz), space_after=(5 if is_head else 0))
             if sp and is_head:
+                sp["font"] = B.heading_font  # serif heading — editorial, premium
                 for rspec in sp["runs"]:
-                    rspec["bold"] = True
+                    rspec["bold"] = False
+                    rspec["font"] = B.heading_font
             if sp:
                 specs.append(sp)
         if specs:
-            add_text(slide, cx + padx, cy + pady, cw - padx - 0.18, ch - 2 * pady, specs,
-                     anchor=MSO_ANCHOR.MIDDLE)
+            add_text(slide, cx + padx, cy + pady, cw - padx - 0.2, ch - 2 * pady, specs,
+                     anchor=MSO_ANCHOR.TOP)
 
 
 # ---------------------------------------------------------------- footer
@@ -826,9 +853,12 @@ def build_content(slide, deck, plan, B, icons=None, texture=None, draw_bg=True, 
     elif mode == "flow":
         _render_flow(slide, deck, B, ml, y + 0.2, cw, min(avail, 1.7), items)
     elif mode == "iconlist":
-        rrect(slide, ml, y, cw, avail, fill=(B.dark if on_dark else B.light), radius=0.06)
-        pad = 0.34
-        iy, ih = y + pad, avail - 2 * pad
+        panel = B.dark if on_dark else C.mix(B.light, "FFFFFF", 0.45)
+        border = None if on_dark else C.mix(B.accent, "FFFFFF", 0.55)
+        rrect(slide, ml, y, cw, avail, fill=panel, radius=0.05, line=border, line_w=0.75)
+        hrule(slide, ml + 0.34, y, cw - 0.68, B.accent, 2.0)  # gold accent rule along the top
+        pad = 0.4
+        iy, ih = y + pad + 0.06, avail - 2 * pad - 0.06
         if has_label:
             _section_label(slide, B, ml + pad, iy, cw - 2 * pad, items[0], on_dark)
             iy += 0.44; ih -= 0.44
