@@ -425,6 +425,13 @@ def _render_columns(slide, deck, B, x, y, w, h, columns):
     gap = 0.24
     cw = (w - gap * (n - 1)) / n
     text_w = cw - 0.5
+    # fitted card height so short columns aren't oversized (padding fix)
+    lh = B.scale["body"] * 1.34 / 72.0
+    needed = []
+    for col in columns:
+        ps = [p for sh in col for p in sh.paras if p.text.strip()]
+        needed.append(sum(_est_lines(p.text, B.scale["body"], text_w, 0.52) * lh + 0.07 for p in ps))
+    h = min(h, max(needed) + 0.5) if needed else h
     for ci, col in enumerate(columns):
         cx = x + ci * (cw + gap)
         paras = [p for sh in col for p in sh.paras if p.text.strip()]
@@ -460,11 +467,12 @@ def _render_card_grid(slide, deck, B, x, y, w, h, items):
         cx, cy = x + c * (cw + gap), y + r * (ch + gap)
         rrect(slide, cx, cy, cw, ch, fill=B.light, radius=0.07)
         rrect(slide, cx, cy, 0.08, ch, fill=B.accent, radius=0.0)  # accent tab
+        fsz = _fit_font(paras, B.scale["body"], cw - padx - 0.18, ch - 2 * pady)
         specs = []
         for j, para in enumerate(paras):
             is_head = (j == 0 and len(paras) > 1)
             sp = _para_spec_one(para, B, B.dark if is_head else B.ink,
-                                size=B.scale["body"], space_after=(3 if is_head else 0))
+                                size=fsz, space_after=(3 if is_head else 0))
             if sp and is_head:
                 for rspec in sp["runs"]:
                     rspec["bold"] = True
@@ -472,7 +480,7 @@ def _render_card_grid(slide, deck, B, x, y, w, h, items):
                 specs.append(sp)
         if specs:
             add_text(slide, cx + padx, cy + pady, cw - padx - 0.18, ch - 2 * pady, specs,
-                     anchor=MSO_ANCHOR.MIDDLE, autofit=True)
+                     anchor=MSO_ANCHOR.MIDDLE)
 
 
 # ---------------------------------------------------------------- footer
@@ -678,7 +686,7 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
     bg(slide, deck, B.paper)
     ml, mr, mt = 0.62, 0.62, 0.5
     cw = deck.width_in - ml - mr
-    footer_top = deck.height_in - 0.66
+    footer_top = deck.height_in - 0.82  # hard clearance so nothing crowds the master footer
     y = mt
     # eyebrow
     if plan.eyebrow:
@@ -766,10 +774,11 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
         tb = plan.tables[0]
         nrows = len(tb.table) if tb.table else 0
         if items:
-            specs = [s for p in items if (s := _para_spec_one(p, B, B.ink, size=B.scale["small"]))]
-            frac = 0.22 if nrows >= 7 else 0.32
-            bh = min((footer_top - y) * frac, 1.4)
-            add_text(slide, ml, y, cw, max(0.35, bh), specs, anchor=MSO_ANCHOR.TOP, autofit=True)
+            frac = 0.22 if nrows >= 7 else 0.30
+            bh = min((footer_top - y) * frac, 1.35)
+            fsz = _fit_font(items, B.scale["small"], cw, bh - 0.05, per_para_gap=0.03, min_size=7.0)
+            specs = [s for p in items if (s := _para_spec_one(p, B, B.ink, size=fsz))]
+            add_text(slide, ml, y, cw, bh, specs, anchor=MSO_ANCHOR.TOP)
             y += bh + 0.12
         tmax = footer_top - y - 0.05
         if tmax >= 0.7:

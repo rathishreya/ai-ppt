@@ -47,8 +47,10 @@ def classify_slide(slide: SlideIR, deck: DeckIR) -> SlidePlan:
             plan.wordmark = s
             break
 
-    # footers: small text in the bottom band
-    plan.footers = [s for s in texts if (s.top or 0) > 0.86 * H and s is not plan.wordmark]
+    # footers: ONLY the recurring SHORT footer line (page no. / "AI71 · … · Confidential").
+    # Long slide-specific bottom notes belong in the body, not the footer.
+    plan.footers = [s for s in texts if (s.top or 0) > 0.85 * H and s is not plan.wordmark
+                    and s.plain_len <= 55]
 
     pool = [s for s in texts if s is not plan.wordmark and s not in plan.footers]
 
