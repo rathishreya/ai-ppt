@@ -154,8 +154,8 @@ def extract_brand(deck: DeckIR) -> BrandSpec:
     if sizes:
         display = min(46, max(34, max(sizes)))
         spec.scale = {
-            "display": round(display), "h1": round(display * 0.72),
-            "h2": round(display * 0.5), "eyebrow": 12.5, "subtitle": round(display * 0.38),
+            "display": round(display), "h1": round(display * 0.82),
+            "h2": round(display * 0.52), "eyebrow": 12.5, "subtitle": round(display * 0.37),
             "body": 13, "small": 10.5, "footer": 9,
         }
     return spec

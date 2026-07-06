@@ -303,18 +303,29 @@ def _render_icon_list(slide, deck, B, x, y, w, h, items, icons, on_dark):
     lead_color = B.accent
     div_color = "34597B" if on_dark else C.mix(B.neutral, "FFFFFF", 0.35)
     from .icons import icon_for
-    d = min(0.66, row_h * 0.62)
-    tx = x + d + 0.28
-    tw = w - (d + 0.28) - 0.1
+    d = min(0.72, row_h * 0.66)
+    arrow_x = x + d + 0.12
+    asz = 0.06
+    tx = x + d + 0.42
+    tw = w - (tx - x) - 0.05
     for i, para in enumerate(items):
         ry = y + i * row_h
+        cy = ry + row_h / 2
         blob = icon_for(para.text, B.accent, i)
-        icon_ring(slide, x, ry + (row_h - d) / 2, d, B.accent, blob)
+        icon_ring(slide, x, cy - d / 2, d, B.accent, blob)
+        _chevron_arrow(slide, arrow_x, cy, asz, B.accent)
         spec = _para_spec_one(para, B, text_color, lead_color=lead_color, space_after=0)
         if spec:
             add_text(slide, tx, ry, tw, row_h, [spec], anchor=MSO_ANCHOR.MIDDLE, autofit=True)
         if i < n - 1:
             hrule(slide, tx, ry + row_h, tw, div_color, 0.9, dash="dash")
+
+
+def _chevron_arrow(slide, cx, cy, s, hex_):
+    for (x1, y1), (x2, y2) in (((cx, cy - s), (cx + s, cy)), ((cx + s, cy), (cx, cy + s))):
+        ln = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, _emu(x1), _emu(y1), _emu(x2), _emu(y2))
+        ln.line.color.rgb = _rgb(hex_)
+        ln.line.width = Pt(2.0)
 
 
 def _render_flow(slide, deck, B, x, y, w, h, items):
@@ -598,39 +609,48 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
         y += th + 0.12
     hrule(slide, ml, y, 0.7, B.accent, 2.4)
     y += 0.18
-    # subtitle
-    if plan.subtitle:
-        sh = _block_h_in(plan.subtitle.text, B.scale["subtitle"], cw, line_spacing=1.2, cw_factor=0.53)
-        add_text(slide, ml, y, cw, sh + 0.05,
-                 [{"runs": [{"text": plan.subtitle.text.replace("\n", " ")}], "size": B.scale["subtitle"],
-                   "font": B.body_font, "color": B.neutral, "line_spacing": 1.2, "space_after": 0}])
-        y += sh + 0.18
-
     items = _body_items(plan)
-
-    # a long, non-lead leading paragraph becomes a callout bar
-    callout = None
+    # a long, non-lead leading paragraph = intro (rendered as a callout bar)
+    intro = None
     if items and _para_len(items[0]) >= 90 and not (items[0].runs and items[0].runs[0].bold):
-        callout = items[0]
-        items = items[1:]
-    if callout:
-        chh = min(_block_h_in(callout.text, B.scale["body"], cw - 0.5, cw_factor=0.53) + 0.18, 1.25)
-        rrect(slide, ml, y, cw, chh, fill=B.light, radius=0.10)
-        spec = _para_spec_one(callout, B, B.ink, space_after=0)
-        add_text(slide, ml + 0.25, y + 0.08, cw - 0.5, chh - 0.16, [spec], anchor=MSO_ANCHOR.MIDDLE, autofit=True)
-        y += chh + 0.20
+        intro = items[0]; items = items[1:]
+    lens = [_para_len(p) for p in items] or [0]
+    has_label = bool(items and _is_label(items[0]))
+
+    # decide body mode up front (so the subtitle can adapt)
+    if plan.tables:
+        mode = "table"
+    elif items and 3 <= len(items) <= 6 and max(lens) <= 40:
+        mode = "flow"
+    elif items and 2 <= len(items) <= 8 and sum(lens) <= 2100 and max(lens) > 40:
+        mode = "iconlist"
+    elif items:
+        mode = "grid"
+    else:
+        mode = "none"
+    is_phase = bool(plan.eyebrow and plan.eyebrow.text.strip().upper().startswith("PHASE"))
+    on_dark = mode == "iconlist" and (is_phase or has_label or intro is not None)
+
+    # subtitle: light callout bar on dark-card slides, plain neutral text otherwise
+    if plan.subtitle:
+        if on_dark:
+            y = _callout_bar(slide, ml, y, cw, plan.subtitle.text.replace("\n", " "), B, bold=True)
+        else:
+            sh = _block_h_in(plan.subtitle.text, B.scale["subtitle"], cw, line_spacing=1.2, cw_factor=0.53)
+            add_text(slide, ml, y, cw, sh + 0.05,
+                     [{"runs": [{"text": plan.subtitle.text.replace("\n", " ")}], "size": B.scale["subtitle"],
+                       "font": B.body_font, "color": B.neutral, "line_spacing": 1.2, "space_after": 0}])
+            y += sh + 0.18
+    if intro:
+        y = _callout_bar(slide, ml, y, cw, None, B, para=intro)
 
     avail = footer_top - y
-    lens = [_para_len(p) for p in items] or [0]
-    on_dark = bool(plan.eyebrow and plan.eyebrow.text.strip().upper().startswith("PHASE"))
 
-    if plan.tables:
-        # table slide: compact narrative above a table that STRICTLY fits above the footer
+    if mode == "table":
         tb = plan.tables[0]
         nrows = len(tb.table) if tb.table else 0
         if items:
             specs = [s for p in items if (s := _para_spec_one(p, B, B.ink, size=B.scale["small"]))]
-            # give big tables more room by shrinking the narrative band
             frac = 0.22 if nrows >= 7 else 0.32
             bh = min((footer_top - y) * frac, 1.4)
             add_text(slide, ml, y, cw, max(0.35, bh), specs, anchor=MSO_ANCHOR.TOP, autofit=True)
@@ -638,24 +658,35 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
         tmax = footer_top - y - 0.05
         if tmax >= 0.7:
             _table(slide, tb, ml, y, cw, B, max_h=tmax)
-    elif items and 3 <= len(items) <= 6 and max(lens) <= 40:
+    elif mode == "flow":
         _render_flow(slide, deck, B, ml, y + 0.2, cw, min(avail, 1.7), items)
-    elif items and 3 <= len(items) <= 6 and max(lens) <= 115:
-        _render_card_grid(slide, deck, B, ml, y, cw, min(avail, 3.8), items)
-    elif items and 2 <= len(items) <= 8 and sum(lens) <= 2100:
-        card_fill = B.dark if on_dark else B.light
-        rrect(slide, ml, y, cw, avail, fill=card_fill, radius=0.06)
+    elif mode == "iconlist":
+        rrect(slide, ml, y, cw, avail, fill=(B.dark if on_dark else B.light), radius=0.06)
         pad = 0.34
         iy, ih = y + pad, avail - 2 * pad
-        if items and _is_label(items[0]):
+        if has_label:
             _section_label(slide, B, ml + pad, iy, cw - 2 * pad, items[0], on_dark)
-            iy += 0.42; ih -= 0.42
+            iy += 0.44; ih -= 0.44
             items = items[1:]
         _render_icon_list(slide, deck, B, ml + pad, iy, cw - 2 * pad, ih, items, icons, on_dark)
-    elif items:
+    elif mode == "grid":
         _render_card_grid(slide, deck, B, ml, y, cw, min(avail, 4.3), items)
 
     _footer(slide, deck, plan, B, on_dark=False)
+
+
+def _callout_bar(slide, x, y, w, text, B, *, para=None, bold=False):
+    """A light rounded callout bar; returns the new y. Preserves the run text if `para` given."""
+    src = para.text if para else text
+    chh = min(_block_h_in(src, B.scale["body"], w - 0.5, cw_factor=0.53) + 0.16, 1.2)
+    rrect(slide, x, y, w, chh, fill=B.light, radius=0.10)
+    if para is not None:
+        spec = _para_spec_one(para, B, B.ink, space_after=0)
+    else:
+        spec = {"runs": [{"text": text, "bold": bold}], "size": B.scale["body"],
+                "font": B.body_font, "color": B.dark, "line_spacing": 1.16, "space_after": 0}
+    add_text(slide, x + 0.26, y + 0.07, w - 0.52, chh - 0.14, [spec], anchor=MSO_ANCHOR.MIDDLE, autofit=True)
+    return y + chh + 0.16
 
 
 BUILDERS = {"title": build_title, "closing": build_closing, "section": build_section,
