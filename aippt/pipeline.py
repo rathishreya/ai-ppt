@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from .ingest import load_deck
 from .brand import extract_brand, BrandSpec
-from .conform import conform
+from .compose import compose
 from .textguard import verify, GuardReport
 
 
@@ -18,7 +18,7 @@ class BuildResult:
 def build(source: str, out_path: str, fail_closed: bool = True) -> BuildResult:
     src = load_deck(source)
     brand = extract_brand(src)
-    prs = conform(src, brand)
+    prs = compose(src, brand)
     prs.save(out_path)
     out = load_deck(out_path)          # re-ingest the emitted file and verify
     report = verify(src, out)

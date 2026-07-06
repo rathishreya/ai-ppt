@@ -11,6 +11,7 @@ applied consistently to all slides. Pictures are carried in a side rail; richer 
 from __future__ import annotations
 import io
 import math
+import copy
 
 from pptx import Presentation
 from pptx.util import Emu, Pt
@@ -25,6 +26,7 @@ from .classify import classify_slide, SlidePlan
 from . import color as C
 
 IN = 914400
+TITLE_IDX, DATE_IDX, FOOTER_IDX = 0, 10, 11
 
 
 def _emu(v_in: float) -> Emu:
@@ -50,6 +52,10 @@ def bg(slide, deck: DeckIR, hex_):
     r = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, deck.width_emu, deck.height_emu)
     _solid(r, hex_)
     _no_line(r)
+    # send to back so it sits behind the layout's placeholders
+    spTree = slide.shapes._spTree
+    spTree.remove(r._element)
+    spTree.insert(2, r._element)
     return r
 
 
@@ -109,7 +115,10 @@ def icon_ring(slide, x, y, d, ring_hex, icon_blob=None):
 
 def bg_image(slide, deck, blob):
     try:
-        slide.shapes.add_picture(io.BytesIO(blob), 0, 0, deck.width_emu, deck.height_emu)
+        pic = slide.shapes.add_picture(io.BytesIO(blob), 0, 0, deck.width_emu, deck.height_emu)
+        spTree = slide.shapes._spTree
+        spTree.remove(pic._element)
+        spTree.insert(2, pic._element)  # behind placeholders
     except Exception:
         pass
 
@@ -132,6 +141,11 @@ def add_text(slide, x, y, w, h, paras, *, anchor=MSO_ANCHOR.TOP, autofit=False, 
         setattr(tf, m, 0)
     if autofit:
         tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+    _write_paras(tf, paras)
+    return tb
+
+
+def _write_paras(tf, paras):
     for i, spec in enumerate(paras):
         p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
         p.alignment = spec.get("align", PP_ALIGN.LEFT)
@@ -160,7 +174,50 @@ def add_text(slide, x, y, w, h, paras, *, anchor=MSO_ANCHOR.TOP, autofit=False, 
                 f.color.rgb = _rgb(col)
             if spec.get("tracking"):
                 _set_tracking(r, spec["tracking"])
-    return tb
+
+
+# ---- placeholder helpers (so the deck follows the master) ----
+
+def _get_ph(slide, idx):
+    for ph in slide.placeholders:
+        if ph.placeholder_format.idx == idx:
+            return ph
+    return None
+
+
+def _clone_ph(slide, idx):
+    ph = _get_ph(slide, idx)
+    if ph is not None:
+        return ph
+    for lph in slide.slide_layout.placeholders:
+        if lph.placeholder_format.idx == idx:
+            slide.shapes._spTree.append(copy.deepcopy(lph._element))
+            return _get_ph(slide, idx)
+    return None
+
+
+def _del_ph_except(slide, keep):
+    for ph in list(slide.placeholders):
+        if ph.placeholder_format.idx not in keep:
+            ph._element.getparent().remove(ph._element)
+
+
+def _fill_ph(slide, idx, x, y, w, h, paras, *, anchor=MSO_ANCHOR.TOP, autofit=False, clone=False):
+    """Put text into a real placeholder (repositioned/styled) so the slide follows the master."""
+    ph = _clone_ph(slide, idx) if clone else _get_ph(slide, idx)
+    if ph is None:
+        return add_text(slide, x, y, w, h, paras, anchor=anchor, autofit=autofit)
+    ph.left, ph.top, ph.width, ph.height = _emu(x), _emu(y), _emu(w), _emu(h)
+    tf = ph.text_frame
+    tf.clear()
+    tf.word_wrap = True
+    tf.vertical_anchor = anchor
+    for m in ("margin_left", "margin_right", "margin_top", "margin_bottom"):
+        setattr(tf, m, Emu(0))
+    if autofit:
+        tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+    _write_paras(tf, paras)
+    return ph
 
 
 # ---------------------------------------------------------------- text estimation
@@ -260,6 +317,33 @@ def _render_icon_list(slide, deck, B, x, y, w, h, items, icons, on_dark):
             hrule(slide, tx, ry + row_h, tw, div_color, 0.9, dash="dash")
 
 
+def _render_flow(slide, deck, B, x, y, w, h, items):
+    """Horizontal chevron flowchart for short step/process sequences."""
+    n = len(items)
+    h = min(h, 1.7)
+    overlap = 0.22
+    cw = (w + overlap * (n - 1)) / n
+    palette = [B.dark, B.secondary]
+    for i, para in enumerate(items):
+        cx = x + i * (cw - overlap)
+        sp = slide.shapes.add_shape(MSO_SHAPE.CHEVRON, _emu(cx), _emu(y), _emu(cw), _emu(h))
+        _solid(sp, palette[i % 2])
+        _no_line(sp)
+        sp.shadow.inherit = False
+        tf = sp.text_frame
+        tf.word_wrap = True
+        for m in ("margin_left", "margin_right", "margin_top", "margin_bottom"):
+            setattr(tf, m, Emu(0))
+        p = tf.paragraphs[0]
+        p.alignment = PP_ALIGN.CENTER
+        for r in para.runs:
+            if r.text:
+                run = p.add_run(); run.text = r.text
+                run.font.name = B.body_font; run.font.size = Pt(B.scale["small"])
+                run.font.bold = True; run.font.color.rgb = _rgb("FFFFFF")
+        tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+
+
 def _render_card_grid(slide, deck, B, x, y, w, h, items):
     n = len(items)
     cols = 3 if n in (3, 6, 9) else (2 if n in (2, 4) else min(3, n))
@@ -287,19 +371,20 @@ def _footer(slide, deck: DeckIR, plan: SlidePlan, B: BrandSpec, on_dark: bool):
     cw = deck.width_in - ml - mr
     col = "FFFFFF" if on_dark else B.neutral
     hrule(slide, ml, y - 0.10, cw, (B.neutral if not on_dark else "31597B"), 0.75)
-    # split footer shapes by horizontal position
     W = deck.width_emu
     left = [s for s in plan.footers if (s.left or 0) < 0.45 * W]
     right = [s for s in plan.footers if (s.left or 0) >= 0.45 * W]
+    # footer text -> real FOOTER / DATE placeholders (cloned) so it follows the master
     if left:
-        add_text(slide, ml, y, cw * 0.6, 0.32,
+        _fill_ph(slide, DATE_IDX, ml, y, cw * 0.62, 0.32,
                  [{"runs": [{"text": "   ".join(s.text.replace(chr(10), " ") for s in left)}],
-                   "size": B.scale["footer"], "font": B.body_font, "color": col, "space_after": 0}])
+                   "size": B.scale["footer"], "font": B.body_font, "color": col, "space_after": 0}],
+                 clone=True)
     if right:
-        add_text(slide, ml + cw * 0.4, y, cw * 0.6, 0.32,
+        _fill_ph(slide, FOOTER_IDX, ml + cw * 0.38, y, cw * 0.62, 0.32,
                  [{"runs": [{"text": "   ".join(s.text.replace(chr(10), " ") for s in right)}],
                    "size": B.scale["footer"], "font": B.body_font, "color": col,
-                   "align": PP_ALIGN.RIGHT, "space_after": 0}])
+                   "align": PP_ALIGN.RIGHT, "space_after": 0}], clone=True)
 
 
 # ---------------------------------------------------------------- table
@@ -388,9 +473,10 @@ def _split_headline(shapes: list[ShapeIR]) -> tuple[str, str]:
 
 
 def build_title(slide, deck, plan, B, icons=None, texture=None):
-    bg(slide, deck, B.dark)
     if texture:
         bg_image(slide, deck, texture)
+    else:
+        bg(slide, deck, B.dark)
     rrect(slide, deck.width_in - 1.5, deck.height_in - 1.5, 0.9, 0.9, fill=None,
           radius=0.5, line=B.accent, line_w=2.0)
     ml = 0.9
@@ -400,7 +486,7 @@ def build_title(slide, deck, plan, B, icons=None, texture=None):
     y = deck.height_in * 0.30
     if headline:
         th = _block_h_in(headline, B.scale["display"], deck.width_in - 2 * ml, 1.06)
-        add_text(slide, ml, y, deck.width_in - 2 * ml, th + 0.2,
+        _fill_ph(slide, TITLE_IDX, ml, y, deck.width_in - 2 * ml, th + 0.2,
                  [{"runs": [{"text": headline}], "size": B.scale["display"], "font": B.heading_font,
                    "color": "FFFFFF", "line_spacing": 1.04, "space_after": 0}])
         y += th + 0.35
@@ -412,26 +498,29 @@ def build_title(slide, deck, plan, B, icons=None, texture=None):
 
 
 def build_closing(slide, deck, plan, B, icons=None, texture=None):
-    bg(slide, deck, B.dark)
     if texture:
         bg_image(slide, deck, texture)
+    else:
+        bg(slide, deck, B.dark)
     rrect(slide, deck.width_in - 1.5, deck.height_in - 1.5, 0.9, 0.9, fill=None,
           radius=0.5, line=B.accent, line_w=2.0)
     if plan.wordmark:
         _wordmark(slide, plan.wordmark.text.strip(), 0.9, 0.55, "FFFFFF", B, size=18)
     headline, support = _split_headline(_gather_nonchrome(plan))
-    add_text(slide, 0.9, deck.height_in * 0.38, deck.width_in - 1.8, 1.4,
+    _fill_ph(slide, TITLE_IDX, 0.9, deck.height_in * 0.38, deck.width_in - 1.8, 1.4,
              [{"runs": [{"text": headline}], "size": B.scale["display"], "font": B.heading_font,
-               "color": "FFFFFF", "space_after": 6}] +
-             ([{"runs": [{"text": support}], "size": B.scale["subtitle"], "font": B.body_font,
-                "color": "C7D2DE", "space_after": 0}] if support else []),
-             anchor=MSO_ANCHOR.MIDDLE)
+               "color": "FFFFFF", "space_after": 0}], anchor=MSO_ANCHOR.MIDDLE)
+    if support:
+        add_text(slide, 0.9, deck.height_in * 0.56, deck.width_in - 1.8, 1.0,
+                 [{"runs": [{"text": support}], "size": B.scale["subtitle"], "font": B.body_font,
+                   "color": "C7D2DE", "space_after": 0}])
 
 
 def build_section(slide, deck, plan, B, icons=None, texture=None):
-    bg(slide, deck, B.dark)
     if texture:
         bg_image(slide, deck, texture)
+    else:
+        bg(slide, deck, B.dark)
     ml = 0.9
     if plan.eyebrow:
         add_text(slide, ml, deck.height_in * 0.34, deck.width_in - 2 * ml, 0.35,
@@ -440,11 +529,13 @@ def build_section(slide, deck, plan, B, icons=None, texture=None):
                    "space_after": 0}])
     shapes = [s for s in _gather_nonchrome(plan) if s is not plan.eyebrow]
     headline, support = _split_headline(shapes)
-    add_text(slide, ml, deck.height_in * 0.42, deck.width_in - 2 * ml, 2.0,
+    _fill_ph(slide, TITLE_IDX, ml, deck.height_in * 0.42, deck.width_in - 2 * ml, 1.6,
              [{"runs": [{"text": headline}], "size": B.scale["display"], "font": B.heading_font,
-               "color": "FFFFFF", "line_spacing": 1.04, "space_after": 8}] +
-             ([{"runs": [{"text": support}], "size": B.scale["subtitle"], "font": B.body_font,
-                "color": "C7D2DE", "space_after": 0}] if support else []))
+               "color": "FFFFFF", "line_spacing": 1.04, "space_after": 0}])
+    if support:
+        add_text(slide, ml, deck.height_in * 0.64, deck.width_in - 2 * ml, 1.2,
+                 [{"runs": [{"text": support}], "size": B.scale["subtitle"], "font": B.body_font,
+                   "color": "C7D2DE", "space_after": 0}])
     _footer(slide, deck, plan, B, on_dark=True)
 
 
@@ -461,10 +552,10 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
                    "font": B.body_font, "color": B.secondary, "bold": True, "tracking": 2.0,
                    "space_after": 0}])
         y += 0.32
-    # title
+    # title -> real TITLE placeholder (follows the master)
     if plan.title:
         th = _block_h_in(plan.title.text, B.scale["h1"], cw, 1.06)
-        add_text(slide, ml, y, cw, th + 0.15,
+        _fill_ph(slide, TITLE_IDX, ml, y, cw, th + 0.15,
                  [{"runs": [{"text": plan.title.text.replace("\n", " ")}], "size": B.scale["h1"],
                    "font": B.heading_font, "color": B.dark, "line_spacing": 1.05, "space_after": 0}])
         y += th + 0.10
@@ -510,6 +601,8 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
             if a < 0.9:
                 y = body_bottom - 0.9; a = 0.9
             y = _table(slide, tb, ml, y, cw, B, max_h=a) + 0.15
+    elif items and 3 <= len(items) <= 6 and max(lens) <= 42:
+        _render_flow(slide, deck, B, ml, y + 0.25, cw, min(avail, 1.7), items)
     elif items and 3 <= len(items) <= 6 and max(lens) <= 115:
         _render_card_grid(slide, deck, B, ml, y, cw, min(avail, 3.6), items)
     elif items and 2 <= len(items) <= 8 and sum(lens) <= 2100:
@@ -527,8 +620,8 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
             items = items[1:]
         _render_icon_list(slide, deck, B, ml + pad, iy, cw - 2 * pad, ih, items, icons, on_dark)
     elif items:
-        specs = [s for p in items if (s := _para_spec_one(p, B, B.ink))]
-        add_text(slide, ml, y, cw, max(0.6, avail), specs, anchor=MSO_ANCHOR.TOP, autofit=True)
+        # consistency: never a plain wall of text -> multi-column cards
+        _render_card_grid(slide, deck, B, ml, y, cw, min(avail, 4.3), items)
 
     _footer(slide, deck, plan, B, on_dark=False)
 
@@ -545,10 +638,15 @@ def compose(deck: DeckIR, brand: BrandSpec) -> Presentation:
     prs.slide_height = Emu(deck.height_emu)
     apply_theme(prs, brand)   # master carries the derived fonts + palette
     blank = prs.slide_layouts[6]
+    L = {l.name: l for l in prs.slide_masters[0].slide_layouts}
     texture = make_contour_texture(1280, 720, brand.dark, C.mix(brand.dark, "FFFFFF", 0.22))
+    layout_for = {"title": "Title Slide", "section": "Section Header",
+                  "closing": "Section Header", "content": "Title and Content"}
     for s in deck.slides:
         plan = classify_slide(s, deck)
         icons = [b for p in plan.pictures if p.image_blob and (b := recolor_icon(p.image_blob, brand.accent))]
-        slide = prs.slides.add_slide(blank)
+        layout = L.get(layout_for.get(plan.stype, "Title and Content"), blank)
+        slide = prs.slides.add_slide(layout)
+        _del_ph_except(slide, {0, 10, 11, 12})  # keep title + footer chrome; drop body/subtitle prompts
         BUILDERS.get(plan.stype, build_content)(slide, deck, plan, brand, icons, texture)
     return prs
