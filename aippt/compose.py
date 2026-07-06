@@ -519,28 +519,39 @@ def _split_headline(shapes: list[ShapeIR]) -> tuple[str, str]:
     return headline, support
 
 
+def _logo_mark(slide, x, y, d, B):
+    ring = slide.shapes.add_shape(MSO_SHAPE.OVAL, _emu(x), _emu(y), _emu(d), _emu(d))
+    ring.fill.background(); ring.line.color.rgb = _rgb("FFFFFF"); ring.line.width = Pt(1.5)
+    ring.shadow.inherit = False
+    ch = slide.shapes.add_shape(MSO_SHAPE.CHEVRON, _emu(x + d * 0.30), _emu(y + d * 0.32),
+                                _emu(d * 0.5), _emu(d * 0.36))
+    ch.fill.background(); ch.line.color.rgb = _rgb(B.accent); ch.line.width = Pt(2.0)
+    ch.shadow.inherit = False
+
+
 def build_title(slide, deck, plan, B, icons=None, texture=None):
     if texture:
         bg_image(slide, deck, texture)
     else:
         bg(slide, deck, B.dark)
-    rrect(slide, deck.width_in - 1.5, deck.height_in - 1.5, 0.9, 0.9, fill=None,
-          radius=0.5, line=B.accent, line_w=2.0)
+    _logo_mark(slide, deck.width_in - 1.55, deck.height_in - 1.5, 0.95, B)
     ml = 0.9
     if plan.wordmark:
-        _wordmark(slide, plan.wordmark.text.strip(), ml, 0.55, "FFFFFF", B, size=18)
+        _wordmark(slide, plan.wordmark.text.strip(), ml, 0.55, "FFFFFF", B, size=20)
     headline, support = _split_headline(_gather_nonchrome(plan))
-    y = deck.height_in * 0.30
+    hw = deck.width_in * 0.72
+    hsize = min(56, round(B.scale["display"] * 1.24))
+    y = deck.height_in * 0.24
     if headline:
-        th = _block_h_in(headline, B.scale["display"], deck.width_in - 2 * ml, 1.06)
-        _fill_ph(slide, TITLE_IDX, ml, y, deck.width_in - 2 * ml, th + 0.2,
-                 [{"runs": [{"text": headline}], "size": B.scale["display"], "font": B.heading_font,
-                   "color": "FFFFFF", "line_spacing": 1.04, "space_after": 0}])
-        y += th + 0.35
+        th = _block_h_in(headline, hsize, hw, line_spacing=1.1, cw_factor=0.62)
+        _fill_ph(slide, TITLE_IDX, ml, y, hw, th + 0.15,
+                 [{"runs": [{"text": headline}], "size": hsize, "font": B.heading_font,
+                   "color": "FFFFFF", "line_spacing": 1.06, "space_after": 0}])
+        y += th + 0.28
     if support:
-        add_text(slide, ml, y, deck.width_in - 2 * ml, 1.4,
+        add_text(slide, ml, y, deck.width_in * 0.8, 1.4,
                  [{"runs": [{"text": support}], "size": B.scale["subtitle"], "font": B.body_font,
-                   "color": "C7D2DE", "line_spacing": 1.22, "space_after": 0}])
+                   "color": "C7D2DE", "line_spacing": 1.24, "space_after": 0}])
     _footer(slide, deck, plan, B, on_dark=True)
 
 
@@ -702,7 +713,7 @@ def compose(deck: DeckIR, brand: BrandSpec) -> Presentation:
     apply_theme(prs, brand)   # master carries the derived fonts + palette
     blank = prs.slide_layouts[6]
     L = {l.name: l for l in prs.slide_masters[0].slide_layouts}
-    texture = make_contour_texture(1280, 720, brand.dark, C.mix(brand.dark, "FFFFFF", 0.22))
+    texture = make_contour_texture(1280, 720, brand.dark, C.mix(brand.dark, "FFFFFF", 0.32))
     layout_for = {"title": "Title Slide", "section": "Section Header",
                   "closing": "Section Header", "content": "Title and Content"}
     for s in deck.slides:

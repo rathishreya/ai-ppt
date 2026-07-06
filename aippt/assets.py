@@ -25,25 +25,25 @@ def make_contour_texture(w: int, h: int, base_hex: str, tint_hex: str, seed: int
     img = Image.new("RGB", (w, h), base)
 
     # soft lighter blobs (like the reference's waves), heavily blurred and low-opacity
-    for _ in range(7):
+    for _ in range(9):
         layer = Image.new("L", (w, h), 0)
         d = ImageDraw.Draw(layer)
-        cx, cy = rnd.uniform(0.1, 1.0) * w, rnd.uniform(-0.2, 0.9) * h
-        rx, ry = rnd.uniform(0.35, 0.8) * w, rnd.uniform(0.35, 0.7) * h
+        cx, cy = rnd.uniform(0.1, 1.05) * w, rnd.uniform(-0.2, 0.95) * h
+        rx, ry = rnd.uniform(0.35, 0.85) * w, rnd.uniform(0.35, 0.7) * h
         d.ellipse([cx - rx, cy - ry, cx + rx, cy + ry], fill=255)
-        layer = layer.filter(ImageFilter.GaussianBlur(radius=w // 8))
-        alpha = rnd.uniform(0.05, 0.13)
+        layer = layer.filter(ImageFilter.GaussianBlur(radius=w // 10))
+        alpha = rnd.uniform(0.10, 0.26)
         tinted = Image.new("RGB", (w, h), tint)
         img = Image.composite(tinted, img, layer.point(lambda p: int(p * alpha)))
 
-    # faint concentric contour arcs for the 'topographic' feel
+    # concentric contour arcs (top-right) for the 'flowing wave' feel
     arc = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     ad = ImageDraw.Draw(arc)
-    ox, oy = rnd.uniform(0.55, 0.95) * w, rnd.uniform(0.0, 0.4) * h
-    for i in range(1, 22):
-        r = i * (w // 22)
-        ad.ellipse([ox - r, oy - r, ox + r, oy + r], outline=(tint[0], tint[1], tint[2], 22), width=2)
-    arc = arc.filter(ImageFilter.GaussianBlur(radius=1))
+    ox, oy = rnd.uniform(0.6, 1.0) * w, rnd.uniform(0.0, 0.35) * h
+    for i in range(1, 26):
+        r = i * (w // 24)
+        ad.ellipse([ox - r, oy - r, ox + r, oy + r], outline=(tint[0], tint[1], tint[2], 40), width=3)
+    arc = arc.filter(ImageFilter.GaussianBlur(radius=2))
     img = Image.alpha_composite(img.convert("RGBA"), arc).convert("RGB")
 
     buf = io.BytesIO()
