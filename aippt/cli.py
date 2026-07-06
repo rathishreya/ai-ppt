@@ -53,6 +53,11 @@ def main(argv=None):
     pb.add_argument("-o", "--output", default="out.pptx")
     pb.add_argument("--no-gate", action="store_true", help="don't fail on invariant violation")
     pb.set_defaults(func=_cmd_build)
+    po = sub.add_parser("polish", help="in-place polish for decks WITH a real master "
+                                       "(keeps master + complex slides, redesigns text slides)")
+    po.add_argument("input")
+    po.add_argument("-o", "--output", default="polished.pptx")
+    po.set_defaults(func=_cmd_polish)
     pp = sub.add_parser("preview", help="wireframe PNGs via Pillow (no LibreOffice)")
     pp.add_argument("input")
     pp.add_argument("-o", "--out-prefix", default="preview")
@@ -60,6 +65,17 @@ def main(argv=None):
     pp.set_defaults(func=_cmd_preview)
     args = ap.parse_args(argv)
     args.func(args)
+
+
+def _cmd_polish(args):
+    from .inplace import polish
+    from .ingest import load_deck
+    from .textguard import verify
+    r = polish(args.input, args.output)
+    rep = verify(load_deck(args.input), load_deck(args.output))
+    print(f"redesigned {len(r['redesigned'])} text slides, preserved {len(r['preserved'])} complex slides")
+    print(f"text preservation: {'PASS' if rep.ok else 'FAIL'}")
+    print("wrote", args.output)
 
 
 def _cmd_preview(args):

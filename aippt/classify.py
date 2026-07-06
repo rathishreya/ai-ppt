@@ -47,10 +47,11 @@ def classify_slide(slide: SlideIR, deck: DeckIR) -> SlidePlan:
             plan.wordmark = s
             break
 
-    # footers: ONLY the recurring SHORT footer line (page no. / "AI71 · … · Confidential").
-    # Long slide-specific bottom notes belong in the body, not the footer.
+    # footers: the recurring SHORT footer line, or a copyright/confidential line (any length).
+    # Long slide-specific *content* notes stay in the body.
+    _FH = ("confidential", "proposal", "خاص", "©", "copyright", "permission", "all rights")
     plan.footers = [s for s in texts if (s.top or 0) > 0.85 * H and s is not plan.wordmark
-                    and s.plain_len <= 55]
+                    and (s.plain_len <= 55 or any(h in s.text.lower() for h in _FH))]
 
     pool = [s for s in texts if s is not plan.wordmark and s not in plan.footers]
 

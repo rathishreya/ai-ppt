@@ -265,9 +265,21 @@ def _para_specs(shape: ShapeIR, B: BrandSpec) -> list[dict]:
     return out
 
 
+def _title_text(plan: SlidePlan) -> str:
+    """Title = first paragraph of the title shape (the rest are body)."""
+    if plan.title and plan.title.paras:
+        return plan.title.paras[0].text
+    return plan.title.text if plan.title else ""
+
+
 def _body_items(plan: SlidePlan) -> list[ParaIR]:
-    """Flatten body into a list of non-empty paragraphs (one per 'item')."""
+    """Flatten body into a list of non-empty paragraphs (one per 'item').
+    A multi-paragraph title shape contributes its 2nd..Nth paragraphs as body."""
     items = []
+    if plan.title and len(plan.title.paras) > 1:
+        for para in plan.title.paras[1:]:
+            if para.text.strip():
+                items.append(para)
     for sh in plan.body:
         for para in sh.paras:
             if para.text.strip():
@@ -681,9 +693,10 @@ def build_section(slide, deck, plan, B, icons=None, texture=None):
     _footer(slide, deck, plan, B, on_dark=True)
 
 
-def build_content(slide, deck, plan, B, icons=None, texture=None):
+def build_content(slide, deck, plan, B, icons=None, texture=None, draw_bg=True, draw_footer=True):
     icons = icons or []
-    bg(slide, deck, B.paper)
+    if draw_bg:
+        bg(slide, deck, B.paper)
     ml, mr, mt = 0.62, 0.62, 0.5
     cw = deck.width_in - ml - mr
     footer_top = deck.height_in - 0.82  # hard clearance so nothing crowds the master footer
@@ -695,11 +708,13 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
                    "font": B.body_font, "color": B.secondary, "bold": True, "tracking": 2.0,
                    "space_after": 0}])
         y += 0.34
-    # title -> real TITLE placeholder (follows the master).
+    # title -> real TITLE placeholder (follows the master). Leave room on the right for a logo.
     if plan.title:
-        th = _block_h_in(plan.title.text, B.scale["h1"], cw, line_spacing=1.1, cw_factor=0.53)
-        _fill_ph(slide, TITLE_IDX, ml, y, cw, th + 0.08,
-                 [{"runs": [{"text": plan.title.text.replace("\n", " ")}], "size": B.scale["h1"],
+        ttext = _title_text(plan)
+        tw = cw - 1.0
+        th = _block_h_in(ttext, B.scale["h1"], tw, line_spacing=1.1, cw_factor=0.53)
+        _fill_ph(slide, TITLE_IDX, ml, y, tw, th + 0.08,
+                 [{"runs": [{"text": ttext.replace("\n", " ")}], "size": B.scale["h1"],
                    "font": B.heading_font, "color": B.dark, "line_spacing": 1.06, "space_after": 0}])
         y += th + 0.12
     hrule(slide, ml, y, 0.7, B.accent, 2.4)
@@ -797,7 +812,8 @@ def build_content(slide, deck, plan, B, icons=None, texture=None):
     elif mode == "grid":
         _render_card_grid(slide, deck, B, ml, y, cw, min(avail, 4.3), items)
 
-    _footer(slide, deck, plan, B, on_dark=False)
+    if draw_footer:
+        _footer(slide, deck, plan, B, on_dark=False)
 
 
 def _callout_bar(slide, x, y, w, text, B, *, para=None, bold=False):
